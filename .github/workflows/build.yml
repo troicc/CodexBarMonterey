@@ -29,6 +29,7 @@ jobs:
         run: |
           python3 Scripts/test_monterey_patcher.py
           python3 Scripts/test_smoke_contract.py
+          python3 Scripts/test_ui_contract.py
           swiftc -typecheck \
             -target arm64-apple-macosx12.0 \
             -sdk "$(xcrun --sdk macosx --show-sdk-path)" \

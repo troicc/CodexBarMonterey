@@ -103,6 +103,14 @@ actor CLIClient {
             timeout: 30)
     }
 
+    func probeAPIProvider(_ provider: String) async throws -> String {
+        let result = try await run(
+            arguments: ["--no-color", "--provider", provider, "--source", "api"],
+            timeout: 60)
+        let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? "Provider API probe completed successfully." : text
+    }
+
     func refreshBrowserSession(provider: String) async throws -> String {
         let result = try await run(
             arguments: ["cookie", "refresh", "--provider", provider, "--allow-keychain-prompt"],

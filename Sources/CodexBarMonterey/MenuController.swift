@@ -18,6 +18,11 @@ final class MenuController: NSObject, NSMenuDelegate {
         self.updater = updater
         super.init()
         NotificationCenter.default.addObserver(self, selector: #selector(preferencesChanged), name: .preferencesChanged, object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(providerConfigurationChanged(_:)),
+            name: .providerConfigurationChanged,
+            object: nil)
         rebuildStatusItems()
         scheduleTimer()
         Task { await refresh() }
@@ -30,6 +35,11 @@ final class MenuController: NSObject, NSMenuDelegate {
         scheduleTimer()
         render()
     }
+
+    @objc private func providerConfigurationChanged(_ notification: Notification) {
+        Task { await refresh() }
+    }
+
 
     private func scheduleTimer() {
         refreshTimer?.invalidate()
@@ -149,16 +159,33 @@ final class MenuController: NSObject, NSMenuDelegate {
                 item.view = ProviderMenuView(snapshot: snapshot)
                 menu.addItem(item)
                 let actions = NSMenuItem(title: snapshot.displayName, action: nil, keyEquivalent: "")
+                actions.isEnabled = true
                 let submenu = NSMenu()
-                submenu.addItem(withTitle: "Open full provider details…", action: #selector(openProviderDetails(_:)), keyEquivalent: "")
-                submenu.items.last?.representedObject = snapshot.provider
-                submenu.addItem(withTitle: "Open cost details…", action: #selector(openProviderCost(_:)), keyEquivalent: "")
-                submenu.items.last?.representedObject = snapshot.provider
-                submenu.addItem(withTitle: "Copy provider JSON", action: #selector(copyProviderJSON(_:)), keyEquivalent: "")
-                submenu.items.last?.representedObject = snapshot.id
+                // NSMenu only auto-resolves targets in the menu that owns the item.
+                // These actions live in a nested menu, so leaving target nil makes
+                // AppKit render every provider action disabled/grey.
+                submenu.autoenablesItems = false
+                addSubmenuItem(
+                    to: submenu,
+                    title: "Open full provider details…",
+                    action: #selector(openProviderDetails(_:)),
+                    representedObject: snapshot.provider)
+                addSubmenuItem(
+                    to: submenu,
+                    title: "Open cost details…",
+                    action: #selector(openProviderCost(_:)),
+                    representedObject: snapshot.provider)
+                addSubmenuItem(
+                    to: submenu,
+                    title: "Copy provider JSON",
+                    action: #selector(copyProviderJSON(_:)),
+                    representedObject: snapshot.id)
                 if let url = snapshot.status?.url {
-                    submenu.addItem(withTitle: "Open status page", action: #selector(openURL(_:)), keyEquivalent: "")
-                    submenu.items.last?.representedObject = url
+                    addSubmenuItem(
+                        to: submenu,
+                        title: "Open status page",
+                        action: #selector(openURL(_:)),
+                        representedObject: url)
                 }
                 actions.submenu = submenu
                 menu.addItem(actions)
@@ -177,6 +204,20 @@ final class MenuController: NSObject, NSMenuDelegate {
         menu.addItem(withTitle: "Quit CodexBar Monterey", action: #selector(quit), keyEquivalent: "q")
         for item in menu.items where item.action != nil { item.target = self }
         return menu
+    }
+
+
+    private func addSubmenuItem(
+        to menu: NSMenu,
+        title: String,
+        action: Selector,
+        representedObject: Any
+    ) {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.representedObject = representedObject
+        item.isEnabled = true
+        menu.addItem(item)
     }
 
     @objc private func refreshAction() { Task { await refresh() } }

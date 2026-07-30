@@ -47,7 +47,7 @@ final class ProviderMenuView: NSView {
         header.addArrangedSubview(source)
         stack.addArrangedSubview(header)
 
-        if let error = snapshot.error?.message {
+        if let error = Self.userFacingError(for: snapshot) {
             let field = NSTextField(wrappingLabelWithString: error)
             field.font = .systemFont(ofSize: 11)
             field.textColor = .systemRed
@@ -76,6 +76,16 @@ final class ProviderMenuView: NSView {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    private static func userFacingError(for snapshot: ProviderSnapshot) -> String? {
+        guard let message = snapshot.error?.message else { return nil }
+        if snapshot.provider == "zai",
+           message.localizedCaseInsensitiveContains("No available fetch strategy")
+        {
+            return "z.ai requires an API key. Open Settings → Providers, click the z.ai name, then choose Set API key…"
+        }
+        return message
+    }
 
     private static func makeWindowRow(window: RateWindow, provider: String) -> NSView {
         let container = NSStackView()

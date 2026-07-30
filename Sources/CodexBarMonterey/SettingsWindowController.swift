@@ -7,6 +7,7 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private let table = NSTableView()
     private var providers: [ProviderDescriptor] = []
     private let statusLabel = NSTextField(labelWithString: "")
+    private let setAPIKeyButton = NSButton(title: "Set API key…", target: nil, action: nil)
 
     init(client: CLIClient, updater: UpdaterController) {
         self.client = client
@@ -112,7 +113,11 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         firstRow.orientation = .horizontal
         firstRow.spacing = 8
         firstRow.addArrangedSubview(button("Refresh list", #selector(refreshProviders)))
-        firstRow.addArrangedSubview(button("Set API key…", #selector(setAPIKey)))
+        setAPIKeyButton.target = self
+        setAPIKeyButton.action = #selector(setAPIKey)
+        setAPIKeyButton.bezelStyle = .rounded
+        setAPIKeyButton.isEnabled = false
+        firstRow.addArrangedSubview(setAPIKeyButton)
         firstRow.addArrangedSubview(button("Refresh browser session…", #selector(refreshBrowserSession)))
         buttons.addArrangedSubview(firstRow)
 
@@ -168,30 +173,62 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let provider = providers[row]
         let cell = NSTableCellView()
-        let toggle = NSButton(checkboxWithTitle: provider.name, target: self, action: #selector(providerToggled(_:)))
+
+        // Keep the checkbox separate from the provider label. In the old cell the
+        // checkbox occupied the full row, so every click toggled the provider and
+        // NSTableView never received a row-selection click. That made Set API key
+        // permanently report “Select a provider first.”
+        let toggle = NSButton(checkboxWithTitle: "", target: self, action: #selector(providerToggled(_:)))
         toggle.state = provider.enabled ? .on : .off
         toggle.tag = row
-        toggle.frame = NSRect(x: 8, y: 3, width: 430, height: 24)
+        toggle.frame = NSRect(x: 8, y: 3, width: 24, height: 24)
+        toggle.toolTip = provider.enabled ? "Disable \(provider.name)" : "Enable \(provider.name)"
         cell.addSubview(toggle)
+
+        let label = NSTextField(labelWithString: provider.name)
+        label.frame = NSRect(x: 38, y: 4, width: 380, height: 22)
+        label.lineBreakMode = .byTruncatingTail
+        cell.textField = label
+        cell.addSubview(label)
         return cell
     }
 
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        updateProviderSelectionStatus()
+    }
+
     private func reloadProviders() async {
+        let selectedID = selectedProvider()?.id
         do {
             providers = try await client.listProviders()
             table.reloadData()
-            statusLabel.stringValue = "\(providers.count) providers detected from the upstream engine."
+            if let selectedID, let index = providers.firstIndex(where: { $0.id == selectedID }) {
+                table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+                table.scrollRowToVisible(index)
+            }
+            if table.selectedRow < 0 {
+                setAPIKeyButton.isEnabled = false
+                statusLabel.stringValue = "\(providers.count) providers detected. Click a provider name to configure it."
+            } else {
+                updateProviderSelectionStatus()
+            }
         } catch {
+            setAPIKeyButton.isEnabled = false
             statusLabel.stringValue = error.localizedDescription
         }
     }
 
     @objc private func providerToggled(_ sender: NSButton) {
         guard providers.indices.contains(sender.tag) else { return }
+        table.selectRowIndexes(IndexSet(integer: sender.tag), byExtendingSelection: false)
         let provider = providers[sender.tag]
+        statusLabel.stringValue = sender.state == .on
+            ? "Enabling \(provider.name)…"
+            : "Disabling \(provider.name)…"
         Task {
             do {
                 try await client.setProvider(provider.id, enabled: sender.state == .on)
+                NotificationCenter.default.post(name: .providerConfigurationChanged, object: provider.id)
                 await reloadProviders()
             } catch {
                 statusLabel.stringValue = error.localizedDescription
@@ -201,11 +238,10 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     }
 
     @objc private func setAPIKey() {
-        guard table.selectedRow >= 0, providers.indices.contains(table.selectedRow) else {
-            statusLabel.stringValue = "Select a provider first."
+        guard let provider = selectedProvider() else {
+            statusLabel.stringValue = "Select a provider name first."
             return
         }
-        let provider = providers[table.selectedRow]
         let alert = NSAlert()
         alert.messageText = "Set API key for \(provider.name)"
         alert.informativeText = "The key is passed to the upstream CodexBarCLI over stdin and stored in its protected config file."
@@ -214,11 +250,23 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
         alert.accessoryView = input
         guard alert.runModal() == .alertFirstButtonReturn, !input.stringValue.isEmpty else { return }
+        statusLabel.stringValue = "Saving API key for \(provider.name)…"
         Task {
             do {
                 try await client.setAPIKey(input.stringValue, provider: provider.id)
-                statusLabel.stringValue = "API key saved for \(provider.name)."
+                NotificationCenter.default.post(name: .providerConfigurationChanged, object: provider.id)
                 await reloadProviders()
+                if provider.id == "zai" {
+                    statusLabel.stringValue = "z.ai key saved. Verifying the API connection…"
+                    do {
+                        _ = try await client.probeAPIProvider(provider.id)
+                        statusLabel.stringValue = "z.ai API key saved and verified."
+                    } catch {
+                        statusLabel.stringValue = "z.ai key was saved, but verification failed: \(error.localizedDescription)"
+                    }
+                } else {
+                    statusLabel.stringValue = "API key saved for \(provider.name)."
+                }
             } catch {
                 statusLabel.stringValue = error.localizedDescription
             }
@@ -282,7 +330,14 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
                 try FileManager.default.createDirectory(
                     at: xdg.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
-                try Data("{}\n".utf8).write(to: xdg, options: .atomic)
+                let emptyConfig = """
+                {
+                  "version": 1,
+                  "hooks": null,
+                  "providers": []
+                }
+                """
+                try Data((emptyConfig + "\n").utf8).write(to: xdg, options: .atomic)
                 try FileManager.default.setAttributes(
                     [.posixPermissions: 0o600],
                     ofItemAtPath: xdg.path)
@@ -344,6 +399,16 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         updater.setAutomatic(sender.state == .on)
     }
 
+    private func updateProviderSelectionStatus() {
+        guard let provider = selectedProvider() else {
+            setAPIKeyButton.isEnabled = false
+            statusLabel.stringValue = "Select a provider name first."
+            return
+        }
+        setAPIKeyButton.isEnabled = true
+        statusLabel.stringValue = "Selected \(provider.name) (provider ID: \(provider.id))."
+    }
+
     private func selectedProvider() -> ProviderDescriptor? {
         guard table.selectedRow >= 0, providers.indices.contains(table.selectedRow) else { return nil }
         return providers[table.selectedRow]
@@ -375,13 +440,17 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
     private func showText(title: String, text: String) {
         let alert = NSAlert()
         alert.messageText = title
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 480, height: 260))
-        let field = NSTextView(frame: scroll.bounds)
-        field.string = text
-        field.isEditable = false
-        field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        scroll.documentView = field
-        scroll.hasVerticalScroller = true
+        let scroll = NSTextView.scrollableTextView()
+        scroll.frame = NSRect(x: 0, y: 0, width: 480, height: 260)
+        if let field = scroll.documentView as? NSTextView {
+            field.string = text
+            field.isEditable = false
+            field.isSelectable = true
+            field.isRichText = false
+            field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            field.textColor = .labelColor
+            field.backgroundColor = .textBackgroundColor
+        }
         alert.accessoryView = scroll
         alert.addButton(withTitle: "OK")
         alert.runModal()
@@ -390,4 +459,5 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
 
 extension Notification.Name {
     static let preferencesChanged = Notification.Name("CodexBarMonterey.preferencesChanged")
+    static let providerConfigurationChanged = Notification.Name("CodexBarMonterey.providerConfigurationChanged")
 }
