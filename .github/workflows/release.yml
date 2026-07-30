@@ -1,39 +1,44 @@
-name: Publish Sparkle Release
+name: Publish GitHub Release
+
 on:
   push:
-    tags: ['v*']
+    tags:
+      - "v*"
 
 jobs:
   release:
     runs-on: macos-26
     permissions:
       contents: write
+
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout release tag
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
       - name: Select Xcode and verify Swift toolchain
         run: |
           sudo xcode-select -s /Applications/Xcode.app
           swift --version
           python3 - <<'PY'
-          import re, subprocess
+          import re
+          import subprocess
+
           output = subprocess.check_output(["swift", "--version"], text=True)
           match = re.search(r"Swift version (\d+)\.(\d+)", output)
           assert match, output
           assert tuple(map(int, match.groups())) >= (6, 2), output
           PY
 
-
-      - name: Validate release configuration
-        env:
-          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-          BUNDLE_ID: ${{ vars.BUNDLE_ID }}
+      - name: Resolve release version
         run: |
-          test -n "$SPARKLE_PUBLIC_KEY"
-          test -n "$SPARKLE_PRIVATE_KEY"
-          test -n "$BUNDLE_ID"
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Release tag must look like v0.1.0; received: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
 
       - name: Import Developer ID certificate when configured
         env:
@@ -48,7 +53,7 @@ jobs:
             echo "CODE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
           fi
 
-      - name: Validate Monterey source backport
+      - name: Validate Monterey compatibility patches
         run: |
           python3 Scripts/test_monterey_patcher.py
           python3 Scripts/test_smoke_contract.py
@@ -57,18 +62,33 @@ jobs:
             -target arm64-apple-macosx12.0 \
             -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
             Patches/MontereyCompat.swift
-      - name: Configure build
+
+      - name: Configure release build
         env:
-          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+          CONFIGURED_BUNDLE_ID: ${{ vars.BUNDLE_ID }}
+          CONFIGURED_SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
         run: |
           cp Config/build.env.example Config/build.env
-          VERSION="${GITHUB_REF_NAME#v}"
-          BUILD_NUMBER="$(git rev-list --count HEAD)"
-          sed -i '' "s|APP_VERSION=0.1.0|APP_VERSION=$VERSION|" Config/build.env
+
+          BUNDLE_ID_VALUE="${CONFIGURED_BUNDLE_ID:-com.example.codexbar.monterey}"
+          PUBLIC_KEY_VALUE="${CONFIGURED_SPARKLE_PUBLIC_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
+
+          sed -i '' "s|APP_VERSION=0.1.0|APP_VERSION=$APP_VERSION|" Config/build.env
           sed -i '' "s|BUILD_NUMBER=1|BUILD_NUMBER=$BUILD_NUMBER|" Config/build.env
-          sed -i '' "s|com.yourname.codexbar.monterey|${{ vars.BUNDLE_ID }}|" Config/build.env
-          sed -i '' "s|PASTE_GENERATE_KEYS_PUBLIC_KEY_HERE|$SPARKLE_PUBLIC_KEY|" Config/build.env
+          sed -i '' "s|com.yourname.codexbar.monterey|$BUNDLE_ID_VALUE|" Config/build.env
+          sed -i '' "s|PASTE_GENERATE_KEYS_PUBLIC_KEY_HERE|$PUBLIC_KEY_VALUE|" Config/build.env
           sed -i '' "s|YOUR_GITHUB_USER/YOUR_REPO|${{ github.repository }}|" Config/build.env
+
+          echo "Release version: $APP_VERSION"
+          echo "Bundle identifier: $BUNDLE_ID_VALUE"
+          if [[ -z "$CONFIGURED_SPARKLE_PUBLIC_KEY" ]]; then
+            echo "Sparkle public key is not configured; this release can be downloaded normally, but secure automatic updates are disabled."
+          fi
+
+      - name: Preflight menu app target
+        run: |
+          export MACOSX_DEPLOYMENT_TARGET=12.0
+          swift build -c release --arch arm64 --product CodexBarMonterey
 
       - name: Build universal app
         run: Scripts/build_universal.sh
@@ -81,7 +101,7 @@ jobs:
           CODEXBAR_SMOKE_OFFLINE: "1"
         run: Scripts/smoke_test_app.sh "dist/universal/CodexBar Monterey.app"
 
-      - name: Notarize and staple when configured
+      - name: Notarize and restaple archive when configured
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -90,19 +110,44 @@ jobs:
           if [[ "$CODE_SIGN_IDENTITY" != "-" && -n "$APPLE_ID" && -n "$APPLE_TEAM_ID" && -n "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
             Scripts/notarize_app.sh \
               "dist/universal/CodexBar Monterey.app" \
-              "releases/CodexBar-Monterey-${GITHUB_REF_NAME#v}.zip"
+              "releases/CodexBar-Monterey-$APP_VERSION.zip"
             Scripts/check_macos12_compat.sh "dist/universal/CodexBar Monterey.app"
           else
-            echo "Notarization credentials are incomplete; publishing the ad-hoc build."
+            echo "Notarization credentials are incomplete; publishing the ad-hoc signed build."
           fi
 
-      - name: Publish release asset
+      - name: Generate SHA-256 checksum
+        run: |
+          cd releases
+          shasum -a 256 "CodexBar-Monterey-$APP_VERSION.zip" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: releases/*.zip
+          name: CodexBar Monterey ${{ github.ref_name }}
+          files: |
+            releases/CodexBar-Monterey-${{ env.APP_VERSION }}.zip
+            releases/SHA256SUMS.txt
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          make_latest: true
+
+      - name: Detect Sparkle signing configuration
+        id: sparkle
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [[ -n "$SPARKLE_PUBLIC_KEY" && -n "$SPARKLE_PRIVATE_KEY" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Sparkle keys are incomplete; skipping signed appcast generation."
+          fi
 
       - name: Generate signed Sparkle appcast
+        if: steps.sparkle.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -111,9 +156,14 @@ jobs:
           SPARKLE_VERSION: 2.9.4
         run: Scripts/generate_appcast.sh releases
 
-      - name: Publish appcast to main
+      - name: Attach appcast to GitHub Release
+        if: steps.sparkle.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" appcast.xml --clobber
+
+      - name: Publish appcast to main
+        if: steps.sparkle.outputs.enabled == 'true'
         run: |
           APPCAST_TMP="$(mktemp)"
           cp appcast.xml "$APPCAST_TMP"
@@ -129,3 +179,11 @@ jobs:
             git commit -m "Update Sparkle appcast for ${GITHUB_REF_NAME}"
             git push origin HEAD:main
           fi
+
+      - name: Write release link
+        run: |
+          {
+            echo "## GitHub Release published"
+            echo
+            echo "https://github.com/${{ github.repository }}/releases/tag/${GITHUB_REF_NAME}"
+          } >> "$GITHUB_STEP_SUMMARY"
