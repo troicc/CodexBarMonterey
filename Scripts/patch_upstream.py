@@ -9,6 +9,7 @@ import sys
 
 
 CORE_RELATIVE = Path("Sources/CodexBarCore")
+CLI_RELATIVE = Path("Sources/CodexBarCLI")
 SHIM_NAME = "MontereyCompat.swift"
 
 
@@ -203,7 +204,7 @@ def transform_core_source(relative: Path, text: str) -> tuple[str, int]:
     return text, changes
 
 
-def scan_for_unavailable_apis(core: Path) -> None:
+def scan_for_unavailable_apis(core: Path, cli: Path | None = None) -> None:
     checks: tuple[tuple[str, re.Pattern[str]], ...] = (
         ("native Duration", re.compile(r"\bDuration\b")),
         ("native ContinuousClock", re.compile(r"\bContinuousClock\b")),
@@ -218,14 +219,18 @@ def scan_for_unavailable_apis(core: Path) -> None:
         ("TimeZone.gmt", re.compile(r"\?\?\s*\.gmt\b")),
     )
     failures: list[str] = []
-    for source in sorted(core.rglob("*.swift")):
-        if source.name == SHIM_NAME:
-            continue
-        text = source.read_text()
-        for label, pattern in checks:
-            for match in pattern.finditer(text):
-                line = text.count("\n", 0, match.start()) + 1
-                failures.append(f"{source}:{line}: {label}: {match.group(0)}")
+    source_roots = [core]
+    if cli is not None:
+        source_roots.append(cli)
+    for source_root in source_roots:
+        for source in sorted(source_root.rglob("*.swift")):
+            if source.name == SHIM_NAME:
+                continue
+            text = source.read_text()
+            for label, pattern in checks:
+                for match in pattern.finditer(text):
+                    line = text.count("\n", 0, match.start()) + 1
+                    failures.append(f"{source}:{line}: {label}: {match.group(0)}")
 
     targeted_path_checks: tuple[tuple[Path, str, re.Pattern[str]], ...] = (
         (Path("Providers/Devin/DevinUsageFetcher.swift"),
@@ -249,12 +254,13 @@ def scan_for_unavailable_apis(core: Path) -> None:
     # appendingPathComponent has no `to:` label and must only be called on URL.
     suspicious_path_call = re.compile(
         r"\.(?:appendingPathComponent|appendPathComponent)\([^\n)]*?,\s*to\s*:")
-    for source in sorted(core.rglob("*.swift")):
-        source_text = source.read_text()
-        for match in suspicious_path_call.finditer(source_text):
-            line = source_text.count("\n", 0, match.start()) + 1
-            failures.append(
-                f"{source}:{line}: invalid path API rewrite with `to:` label: {match.group(0)}")
+    for source_root in source_roots:
+        for source in sorted(source_root.rglob("*.swift")):
+            source_text = source.read_text()
+            for match in suspicious_path_call.finditer(source_text):
+                line = source_text.count("\n", 0, match.start()) + 1
+                failures.append(
+                    f"{source}:{line}: invalid path API rewrite with `to:` label: {match.group(0)}")
 
     webkit = core / "OpenAIWeb/OpenAIDashboardWebsiteDataStore.swift"
     if webkit.exists():
@@ -271,21 +277,39 @@ def scan_for_unavailable_apis(core: Path) -> None:
 
 def apply_monterey_source_compat(codexbar: Path, project_root: Path) -> None:
     core = codexbar / CORE_RELATIVE
+    cli = codexbar / CLI_RELATIVE
     if not core.is_dir():
         raise SystemExit(f"CodexBarCore source directory not found: {core}")
+    if not cli.is_dir():
+        raise SystemExit(f"CodexBarCLI source directory not found: {cli}")
 
     changed_files = 0
     total_changes = 0
-    for source in sorted(core.rglob("*.swift")):
-        if source.name == SHIM_NAME:
-            continue
-        relative = source.relative_to(core)
-        original = source.read_text()
-        updated, changes = transform_core_source(relative, original)
-        if updated != original:
-            source.write_text(updated)
-            changed_files += 1
-            total_changes += changes
+    changes_by_target: dict[str, tuple[int, int]] = {}
+    for target_name, source_root in (("CodexBarCore", core), ("CodexBarCLI", cli)):
+        target_changed_files = 0
+        target_changes = 0
+        for source in sorted(source_root.rglob("*.swift")):
+            if source.name == SHIM_NAME:
+                continue
+            relative = source.relative_to(source_root)
+            original = source.read_text()
+            updated, changes = transform_core_source(relative, original)
+
+            # Monterey compatibility types live in the CodexBarCore target. Swift
+            # imports are file-scoped, so any CLI file transformed to use the shim
+            # must explicitly import CodexBarCore.
+            if target_name == "CodexBarCLI" and "Monterey" in updated and "import CodexBarCore" not in updated:
+                updated = "import CodexBarCore\n" + updated
+                changes += 1
+
+            if updated != original:
+                source.write_text(updated)
+                changed_files += 1
+                total_changes += changes
+                target_changed_files += 1
+                target_changes += changes
+        changes_by_target[target_name] = (target_changes, target_changed_files)
 
     shim_source = project_root / "Patches" / SHIM_NAME
     if not shim_source.exists():
@@ -295,12 +319,15 @@ def apply_monterey_source_compat(codexbar: Path, project_root: Path) -> None:
     # A fixed upstream tag must contain these APIs; zero changes means the patch
     # silently stopped matching and should never proceed to a misleading build.
     if changed_files == 0 or total_changes == 0:
-        raise SystemExit("No CodexBarCore Monterey source transformations were applied")
+        raise SystemExit("No CodexBar Monterey source transformations were applied")
 
+    core_changes, core_files = changes_by_target["CodexBarCore"]
+    cli_changes, cli_files = changes_by_target["CodexBarCLI"]
     print(
-        f"Backported CodexBarCore for macOS 12: {total_changes} source transformation(s) "
-        f"across {changed_files} file(s), plus {SHIM_NAME}.")
-    scan_for_unavailable_apis(core)
+        f"Backported CodexBar for macOS 12: {total_changes} source transformation(s) "
+        f"across {changed_files} file(s) "
+        f"(Core: {core_changes}/{core_files}, CLI: {cli_changes}/{cli_files}), plus {SHIM_NAME}.")
+    scan_for_unavailable_apis(core, cli)
 
 
 def main() -> None:

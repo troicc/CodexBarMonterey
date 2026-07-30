@@ -91,6 +91,12 @@ public struct MontereyContinuousClock: Sendable {
     public init() {}
     public var now: Instant { Instant.now }
     public static var now: Instant { Instant.now }
+
+    public func sleep(until deadline: Instant) async throws {
+        let delay = self.now.duration(to: deadline)
+        guard delay > .zero else { return }
+        try await Task.sleep(for: delay)
+    }
 }
 
 /// NSLock-backed replacement for OSAllocatedUnfairLock, which starts at macOS 13.

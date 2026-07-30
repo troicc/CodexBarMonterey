@@ -62,3 +62,27 @@ The second GitHub Actions log reached `CodexBarCore` compilation after the macOS
 `WayfinderSettingsReader.appending(path:to:)` into `self.appendingPathComponent(..., to: ...)`.
 
 CompilerFix2 removes global `appending(path:)` / `append(path:)` rewrites. It pins those conversions to the three v0.46.0 files that actually use the macOS 13 URL path APIs (Devin, ElevenLabs, and NeuralWatt), preserves Wayfinder's helper method, scans for the invalid `to:` rewrite, and type-checks transformed regression fixtures with `swiftc`.
+
+## CompilerFix3: CodexBarCLI clock backport
+
+The third GitHub Actions log confirmed that `CodexBarCore` now compiles and the
+build advances to the `CodexBarCLI` target. It then reported 40 compiler
+diagnostics, all in two files:
+
+- `Sources/CodexBarCLI/CLIServeCommand.swift`
+- `Sources/CodexBarCLI/CLIServeOperationCoordinator.swift`
+
+Every diagnostic belongs to the same macOS 13 clock API family:
+`ContinuousClock`, `ContinuousClock.Instant`, `now`, `advanced(by:)`,
+`Duration.seconds`, `sleep(until:)`, and `Instant: Comparable`.
+
+CompilerFix3 expands the deterministic source transform and compatibility scan
+from `CodexBarCore` to both build targets (`CodexBarCore` and `CodexBarCLI`).
+Transformed CLI files receive an explicit file-scoped `import CodexBarCore`
+when needed. `MontereyContinuousClock` now implements `sleep(until:)`.
+
+The regression suite now builds the compatibility shim as a real
+`CodexBarCore.swiftmodule`, imports it from synthetic CLI files, and type-checks
+the exact clock operations used by the failed upstream files: optional
+deadlines, `now`, `advanced(by: .seconds(...))`, `min`, comparison operators,
+and asynchronous `sleep(until:)`.

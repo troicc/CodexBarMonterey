@@ -24,6 +24,7 @@ def main() -> None:
         project = Path(temp)
         codexbar = project / "Vendor" / "CodexBar"
         core = codexbar / "Sources" / "CodexBarCore"
+        cli = codexbar / "Sources" / "CodexBarCLI"
 
         write(core, "Basic.swift", '''import Foundation
 final class Box {
@@ -118,8 +119,53 @@ func store(storageKey: String) -> WKWebsiteDataStore {
 }
 ''')
 
+        write(cli, "CLIServeCommand.swift", '''import Foundation
+import CodexBarCore
+
+struct ServeResponseRequest: Sendable {
+    let deadline: ContinuousClock.Instant?
+}
+
+func requestDeadline(startedAt: ContinuousClock.Instant, timeout: TimeInterval) -> ContinuousClock.Instant {
+    startedAt.advanced(by: .seconds(timeout))
+}
+
+func currentInstant() -> ContinuousClock.Instant {
+    ContinuousClock().now
+}
+''')
+        write(cli, "CLIServeOperationCoordinator.swift", '''import Foundation
+
+actor CLIServeOperationCoordinator<Value: Sendable> {
+    typealias Instant = ContinuousClock.Instant
+    typealias Now = @Sendable () -> Instant
+    typealias SleepUntil = @Sendable (Instant) async throws -> Void
+
+    private let now: Now
+    private let sleepUntil: SleepUntil
+
+    init(
+        now: @escaping Now = { ContinuousClock().now },
+        sleepUntil: @escaping SleepUntil = { deadline in
+            try await ContinuousClock().sleep(until: deadline)
+        })
+    {
+        self.now = now
+        self.sleepUntil = sleepUntil
+    }
+
+    func earlier(_ lhs: Instant, _ rhs: Instant) -> Instant {
+        min(lhs, rhs)
+    }
+
+    func expired(_ deadline: Instant) -> Bool {
+        deadline <= self.now()
+    }
+}
+''')
+
         module.apply_monterey_source_compat(codexbar, ROOT)
-        module.scan_for_unavailable_apis(core)
+        module.scan_for_unavailable_apis(core, cli)
 
         basic = (core / "Basic.swift").read_text()
         assert "MontereyDuration" in basic
@@ -154,6 +200,15 @@ func store(storageKey: String) -> WKWebsiteDataStore {
         assert "store = .default()" in webkit
         assert (core / "MontereyCompat.swift").exists()
 
+        cli_command = (cli / "CLIServeCommand.swift").read_text()
+        cli_coordinator = (cli / "CLIServeOperationCoordinator.swift").read_text()
+        assert "ContinuousClock" not in cli_command.replace("MontereyContinuousClock", "")
+        assert "ContinuousClock" not in cli_coordinator.replace("MontereyContinuousClock", "")
+        assert "MontereyContinuousClock" in cli_command
+        assert "MontereyContinuousClock" in cli_coordinator
+        assert "import CodexBarCore" in cli_command
+        assert "import CodexBarCore" in cli_coordinator
+
         # Compile the exact path-rewrite regression fixtures. This catches semantic
         # corruption that a string-only scan cannot detect (the previous failure
         # changed a Wayfinder helper call into a URL method call on `self`).
@@ -165,7 +220,25 @@ func store(storageKey: String) -> WKWebsiteDataStore {
             str(core / "Providers/Wayfinder/WayfinderSettingsReader.swift"),
         ], check=True)
 
-    print("Monterey patcher synthetic and semantic regression tests passed.")
+        # Build the shim as a real CodexBarCore module, then type-check the
+        # transformed CLI fixtures against it. This catches missing public API,
+        # missing file-scoped imports, clock comparison, advanced(by:), and
+        # sleep(until:) compatibility before the full SwiftPM build starts.
+        module_dir = project / "SwiftModules"
+        module_dir.mkdir()
+        subprocess.run([
+            "swiftc", "-emit-module", "-parse-as-library",
+            "-module-name", "CodexBarCore",
+            str(core / "MontereyCompat.swift"),
+            "-emit-module-path", str(module_dir / "CodexBarCore.swiftmodule"),
+        ], check=True)
+        subprocess.run([
+            "swiftc", "-typecheck", "-I", str(module_dir),
+            str(cli / "CLIServeCommand.swift"),
+            str(cli / "CLIServeOperationCoordinator.swift"),
+        ], check=True)
+
+    print("Monterey patcher Core + CLI semantic regression tests passed.")
 
 
 if __name__ == "__main__":
