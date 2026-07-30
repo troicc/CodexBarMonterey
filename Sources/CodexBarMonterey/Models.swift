@@ -1,0 +1,282 @@
+import Foundation
+
+struct ProviderSnapshot: Decodable, Hashable, Identifiable {
+    let provider: String
+    let version: String?
+    let source: String?
+    let status: ProviderStatus?
+    let usage: UsageSnapshot?
+    let credits: CreditsSnapshot?
+    let account: String?
+    let plan: String?
+    let error: ProviderError?
+    let rawJSON: String?
+
+    init(
+        provider: String,
+        version: String?,
+        source: String?,
+        status: ProviderStatus?,
+        usage: UsageSnapshot?,
+        credits: CreditsSnapshot?,
+        account: String?,
+        plan: String?,
+        error: ProviderError?,
+        rawJSON: String?)
+    {
+        self.provider = provider
+        self.version = version
+        self.source = source
+        self.status = status
+        self.usage = usage
+        self.credits = credits
+        self.account = account
+        self.plan = plan
+        self.error = error
+        self.rawJSON = rawJSON
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.provider = try container.decode(String.self, forKey: .provider)
+        self.version = try? container.decodeIfPresent(String.self, forKey: .version)
+        self.source = try? container.decodeIfPresent(String.self, forKey: .source)
+        self.status = try? container.decodeIfPresent(ProviderStatus.self, forKey: .status)
+        self.usage = try? container.decodeIfPresent(UsageSnapshot.self, forKey: .usage)
+        self.credits = try? container.decodeIfPresent(CreditsSnapshot.self, forKey: .credits)
+        self.account = try? container.decodeIfPresent(String.self, forKey: .account)
+        self.plan = try? container.decodeIfPresent(String.self, forKey: .plan)
+        self.error = try? container.decodeIfPresent(ProviderError.self, forKey: .error)
+        self.rawJSON = nil
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider, version, source, status, usage, credits, account, plan, error
+    }
+
+    var id: String {
+        let identity = usage?.identity?.accountEmail ?? account ?? "default"
+        return "\(provider)::\(identity)"
+    }
+
+    var displayName: String {
+        ProviderCatalog.displayName(for: provider)
+    }
+
+    var maximumUsedPercent: Double? {
+        let values = [usage?.primary?.usedPercent, usage?.secondary?.usedPercent, usage?.tertiary?.usedPercent]
+            .compactMap { $0 }
+        return values.max()
+    }
+
+    var isFailed: Bool { error != nil }
+}
+
+struct ProviderStatus: Decodable, Hashable {
+    let indicator: String?
+    let description: String?
+    let updatedAt: Date?
+    let url: URL?
+}
+
+struct UsageSnapshot: Decodable, Hashable {
+    let primary: RateWindow?
+    let secondary: RateWindow?
+    let tertiary: RateWindow?
+    let updatedAt: Date?
+    let identity: UsageIdentity?
+    let accountEmail: String?
+    let accountOrganization: String?
+    let loginMethod: String?
+}
+
+struct UsageIdentity: Decodable, Hashable {
+    let providerID: String?
+    let accountEmail: String?
+    let accountOrganization: String?
+    let loginMethod: String?
+}
+
+struct RateWindow: Decodable, Hashable {
+    let usedPercent: Double?
+    let windowMinutes: Double?
+    let resetsAt: Date?
+
+    var remainingPercent: Double? {
+        guard let usedPercent else { return nil }
+        return max(0, min(100, 100 - usedPercent))
+    }
+}
+
+struct CreditsSnapshot: Decodable, Hashable {
+    let remaining: Double?
+    let updatedAt: Date?
+    let hasCredits: Bool?
+    let unlimited: Bool?
+}
+
+struct ProviderError: Decodable, Hashable {
+    let message: String?
+    let code: String?
+
+    init(message: String?, code: String? = nil) {
+        self.message = message
+        self.code = code
+    }
+
+    init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer(),
+           let message = try? single.decode(String.self)
+        {
+            self.init(message: message)
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let message = (try? container.decode(String.self, forKey: .message)) ??
+            (try? container.decode(String.self, forKey: .error))
+        let code = try? container.decode(String.self, forKey: .code)
+        self.init(message: message, code: code)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case message, error, code
+    }
+}
+
+struct ProviderDescriptor: Hashable, Identifiable {
+    let id: String
+    let name: String
+    let enabled: Bool
+}
+
+enum ProviderCatalog {
+    // Exact stable IDs registered by CodexBar v0.46.0. The settings UI normally
+    // obtains names dynamically from `config providers`; this table is only a
+    // fallback for snapshots and older text output.
+    private static let names: [String: String] = [
+        "codex": "Codex",
+        "openai": "OpenAI",
+        "azureopenai": "Azure OpenAI",
+        "claude": "Claude",
+        "clinepass": "ClinePass",
+        "cursor": "Cursor",
+        "opencode": "OpenCode",
+        "opencodego": "OpenCode Go",
+        "alibaba": "Alibaba Coding Plan",
+        "alibabatokenplan": "Alibaba Token Plan",
+        "qwencloud": "Qwen Cloud",
+        "factory": "Droid / Factory",
+        "gemini": "Gemini",
+        "antigravity": "Antigravity",
+        "copilot": "GitHub Copilot",
+        "devin": "Devin",
+        "zai": "z.ai",
+        "minimax": "MiniMax",
+        "manus": "Manus",
+        "kimi": "Kimi",
+        "kilo": "Kilo",
+        "kiro": "Kiro",
+        "vertexai": "Vertex AI",
+        "augment": "Augment",
+        "jetbrains": "JetBrains AI",
+        "moonshot": "Moonshot / Kimi API",
+        "amp": "Amp",
+        "t3chat": "T3 Chat",
+        "ollama": "Ollama",
+        "synthetic": "Synthetic",
+        "warp": "Warp",
+        "openrouter": "OpenRouter",
+        "elevenlabs": "ElevenLabs",
+        "windsurf": "Windsurf",
+        "zed": "Zed",
+        "perplexity": "Perplexity",
+        "mimo": "Xiaomi MiMo",
+        "doubao": "Doubao",
+        "sakana": "Sakana AI",
+        "abacus": "Abacus AI",
+        "mistral": "Mistral",
+        "deepseek": "DeepSeek",
+        "deepinfra": "DeepInfra",
+        "codebuff": "Codebuff",
+        "crof": "Crof",
+        "venice": "Venice",
+        "commandcode": "Command Code",
+        "qoder": "Qoder",
+        "stepfun": "StepFun",
+        "bedrock": "AWS Bedrock",
+        "grok": "Grok",
+        "groq": "GroqCloud",
+        "llmproxy": "LLM Proxy",
+        "litellm": "LiteLLM",
+        "deepgram": "Deepgram",
+        "poe": "Poe",
+        "chutes": "Chutes",
+        "neuralwatt": "Neuralwatt",
+        "clawrouter": "ClawRouter",
+        "longcat": "LongCat",
+        "sub2api": "sub2api",
+        "wayfinder": "Wayfinder",
+        "zenmux": "ZenMux",
+        "aiand": "AIand",
+        "zoommate": "ZoomMate",
+
+        // Compatibility aliases retained for older local configs and future engine
+        // snapshots. They do not replace the exact IDs above.
+        "azure-openai": "Azure OpenAI",
+        "opencode-go": "OpenCode Go",
+        "alibaba-token-plan": "Alibaba Token Plan",
+        "qwen-cloud": "Qwen Cloud",
+        "droid": "Droid / Factory",
+        "vertex": "Vertex AI",
+        "command-code": "Command Code",
+        "xai": "xAI",
+    ]
+
+    static func displayName(for id: String) -> String {
+        names[id] ?? id
+            .replacingOccurrences(of: "_", with: "-")
+            .split(separator: "-")
+            .map { $0.capitalized }
+            .joined(separator: " ")
+    }
+
+    static func documentationURL(for id: String) -> URL {
+        let slugs: [String: String] = [
+            "azureopenai": "azure-openai",
+            "opencodego": "opencode",
+            "alibaba": "alibaba-coding-plan",
+            "alibabatokenplan": "alibaba-token-plan",
+            "qwencloud": "qwen-cloud",
+            "commandcode": "command-code",
+            "llmproxy": "llm-proxy",
+        ]
+        let slug = slugs[id] ?? id
+        return URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/\(slug).md")!
+    }
+}
+
+enum JSONCoding {
+    static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            let formatters = ISO8601DateFormatter.compatibleFormatters
+            for formatter in formatters {
+                if let date = formatter.date(from: value) { return date }
+            }
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO-8601 date: \(value)")
+        }
+        return decoder
+    }()
+}
+
+private extension ISO8601DateFormatter {
+    static let compatibleFormatters: [ISO8601DateFormatter] = {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let regular = ISO8601DateFormatter()
+        regular.formatOptions = [.withInternetDateTime]
+        return [fractional, regular]
+    }()
+}

@@ -1,0 +1,122 @@
+name: Publish Sparkle Release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: macos-26
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select Xcode and verify Swift toolchain
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          swift --version
+          python3 - <<'PY'
+          import re, subprocess
+          output = subprocess.check_output(["swift", "--version"], text=True)
+          match = re.search(r"Swift version (\d+)\.(\d+)", output)
+          assert match, output
+          assert tuple(map(int, match.groups())) >= (6, 2), output
+          PY
+
+
+      - name: Validate release configuration
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          BUNDLE_ID: ${{ vars.BUNDLE_ID }}
+        run: |
+          test -n "$SPARKLE_PUBLIC_KEY"
+          test -n "$SPARKLE_PRIVATE_KEY"
+          test -n "$BUNDLE_ID"
+
+      - name: Import Developer ID certificate when configured
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          CODE_SIGN_IDENTITY: ${{ secrets.CODE_SIGN_IDENTITY }}
+        run: |
+          if [[ -n "$DEVELOPER_ID_P12_BASE64" && -n "$DEVELOPER_ID_P12_PASSWORD" && -n "$CODE_SIGN_IDENTITY" ]]; then
+            Scripts/import_signing_certificate.sh
+          else
+            echo "Developer ID secrets are incomplete; using ad-hoc signing."
+            echo "CODE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+
+      - name: Configure build
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+        run: |
+          cp Config/build.env.example Config/build.env
+          VERSION="${GITHUB_REF_NAME#v}"
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          sed -i '' "s|APP_VERSION=0.1.0|APP_VERSION=$VERSION|" Config/build.env
+          sed -i '' "s|BUILD_NUMBER=1|BUILD_NUMBER=$BUILD_NUMBER|" Config/build.env
+          sed -i '' "s|com.yourname.codexbar.monterey|${{ vars.BUNDLE_ID }}|" Config/build.env
+          sed -i '' "s|PASTE_GENERATE_KEYS_PUBLIC_KEY_HERE|$SPARKLE_PUBLIC_KEY|" Config/build.env
+          sed -i '' "s|YOUR_GITHUB_USER/YOUR_REPO|${{ github.repository }}|" Config/build.env
+
+      - name: Build universal app
+        run: Scripts/build_universal.sh
+
+      - name: Verify Monterey deployment targets
+        run: Scripts/check_macos12_compat.sh "dist/universal/CodexBar Monterey.app"
+
+      - name: Offline bundle smoke test
+        env:
+          CODEXBAR_SMOKE_OFFLINE: "1"
+        run: Scripts/smoke_test_app.sh "dist/universal/CodexBar Monterey.app"
+
+      - name: Notarize and staple when configured
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          if [[ "$CODE_SIGN_IDENTITY" != "-" && -n "$APPLE_ID" && -n "$APPLE_TEAM_ID" && -n "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            Scripts/notarize_app.sh \
+              "dist/universal/CodexBar Monterey.app" \
+              "releases/CodexBar-Monterey-${GITHUB_REF_NAME#v}.zip"
+            Scripts/check_macos12_compat.sh "dist/universal/CodexBar Monterey.app"
+          else
+            echo "Notarization credentials are incomplete; publishing the ad-hoc build."
+          fi
+
+      - name: Publish release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: releases/*.zip
+          generate_release_notes: true
+
+      - name: Generate signed Sparkle appcast
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          DOWNLOAD_URL_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/
+          OUTPUT_PATH: ${{ github.workspace }}/appcast.xml
+          SPARKLE_VERSION: 2.9.4
+        run: Scripts/generate_appcast.sh releases
+
+      - name: Publish appcast to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APPCAST_TMP="$(mktemp)"
+          cp appcast.xml "$APPCAST_TMP"
+          git worktree add /tmp/codexbar-monterey-main origin/main
+          cp "$APPCAST_TMP" /tmp/codexbar-monterey-main/appcast.xml
+          cd /tmp/codexbar-monterey-main
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          if git diff --cached --quiet; then
+            echo "appcast.xml unchanged"
+          else
+            git commit -m "Update Sparkle appcast for ${GITHUB_REF_NAME}"
+            git push origin HEAD:main
+          fi

@@ -1,0 +1,50 @@
+name: Build Monterey Compatibility App
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ['README.md', 'README.zh-CN.md', 'appcast.xml']
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-26
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode and verify Swift toolchain
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          swift --version
+          python3 - <<'PY'
+          import re, subprocess
+          output = subprocess.check_output(["swift", "--version"], text=True)
+          match = re.search(r"Swift version (\d+)\.(\d+)", output)
+          assert match, output
+          assert tuple(map(int, match.groups())) >= (6, 2), output
+          PY
+      - name: Configure build
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+        run: |
+          cp Config/build.env.example Config/build.env
+          BUNDLE_ID_VALUE="${{ vars.BUNDLE_ID }}"
+          BUNDLE_ID_VALUE="${BUNDLE_ID_VALUE:-com.example.codexbar.monterey}"
+          PUBLIC_KEY_VALUE="${SPARKLE_PUBLIC_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}"
+          sed -i '' "s|com.yourname.codexbar.monterey|$BUNDLE_ID_VALUE|" Config/build.env
+          sed -i '' "s|PASTE_GENERATE_KEYS_PUBLIC_KEY_HERE|$PUBLIC_KEY_VALUE|" Config/build.env
+          sed -i '' "s|YOUR_GITHUB_USER/YOUR_REPO|${{ github.repository }}|" Config/build.env
+      - name: Build universal app
+        run: Scripts/build_universal.sh
+      - name: Verify minimum OS
+        run: Scripts/check_macos12_compat.sh "dist/universal/CodexBar Monterey.app"
+      - name: Offline bundle smoke test
+        env:
+          CODEXBAR_SMOKE_OFFLINE: "1"
+        run: Scripts/smoke_test_app.sh "dist/universal/CodexBar Monterey.app"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodexBar-Monterey
+          path: releases/*.zip

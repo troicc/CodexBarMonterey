@@ -1,0 +1,30 @@
+name: Track CodexBar Upstream
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check latest upstream release
+        id: check
+        run: |
+          RESULT=$(python3 Scripts/update_engine_version.py)
+          echo "$RESULT"
+          if [[ "$RESULT" == updated:* ]]; then echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Create update pull request
+        if: steps.check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automated/upstream-codexbar
+          title: "Sync latest CodexBar provider engine"
+          commit-message: "chore: sync latest CodexBar engine"
+          body: |
+            Updates ENGINE_VERSION to the latest upstream CodexBar release.
+            Merge only after the macOS 12 build workflow passes.
