@@ -43,6 +43,10 @@ jobs:
           sed -i '' "s|com.yourname.codexbar.monterey|$BUNDLE_ID_VALUE|" Config/build.env
           sed -i '' "s|PASTE_GENERATE_KEYS_PUBLIC_KEY_HERE|$PUBLIC_KEY_VALUE|" Config/build.env
           sed -i '' "s|YOUR_GITHUB_USER/YOUR_REPO|${{ github.repository }}|" Config/build.env
+      - name: Preflight menu app target
+        run: |
+          export MACOSX_DEPLOYMENT_TARGET=12.0
+          swift build -c release --arch arm64 --product CodexBarMonterey
       - name: Build universal app
         run: Scripts/build_universal.sh
       - name: Verify minimum OS

@@ -86,3 +86,12 @@ The regression suite now builds the compatibility shim as a real
 the exact clock operations used by the failed upstream files: optional
 deadlines, `now`, `advanced(by: .seconds(...))`, `min`, comparison operators,
 and asynchronous `sleep(until:)`.
+
+## CompilerFix4: Swift 6.3 AppKit entry point
+
+- Replaced top-level `main.swift` statements with an explicit `@main` entry type.
+- Marked `static main()` as `@MainActor`, so constructing `AppDelegate` and accessing AppKit satisfy Swift 6.3 actor isolation.
+- Retained the delegate across the blocking AppKit run loop using `withExtendedLifetime`.
+- Added a fast `Preflight menu app target` workflow step before the provider engine build.
+- Reordered `build_universal.sh` so the lightweight AppKit target compiles before the expensive upstream engine for each architecture.
+- Compiled the exact `CodexBarMontereyApp.swift` and `AppDelegate.swift` against a synthetic actor-annotated AppKit module under Swift 6.2; the previous MainActor isolation error no longer reproduces.

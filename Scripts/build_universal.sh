@@ -2,7 +2,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 for arch in arm64 x86_64; do
-  "$ROOT/Scripts/build_engine.sh" "$arch"
+  # build_app.sh compiles the lightweight AppKit shell first and invokes
+  # build_engine.sh only after that succeeds. This catches shell/Swift actor
+  # errors before spending several minutes compiling the provider engine.
   "$ROOT/Scripts/build_app.sh" "$arch"
 done
 A="$ROOT/dist/arm64/CodexBar Monterey.app"
