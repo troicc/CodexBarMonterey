@@ -50,6 +50,11 @@ assert "extractHistory" in parser
 assert "today-spend" in parser
 assert "30d-tokens" in parser
 
+# Swift 6.3 requires StrokeStyle labels in declaration order. Catch the exact
+# ordering bug before the macOS build step.
+assert "StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)" in views
+assert "StrokeStyle(lineWidth: 3, lineJoin: .round, lineCap: .round)" not in views
+
 # A newly created config must have the upstream versioned root shape, never `{}`.
 assert '"version": 1' in settings
 assert 'Data("{}\\n".utf8)' not in settings

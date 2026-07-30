@@ -576,7 +576,7 @@ private struct LineHistoryChart: View {
                         else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
                 }
-                .stroke(color, style: StrokeStyle(lineWidth: 3, lineJoin: .round, lineCap: .round))
+                .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 LinearGradient(
                     gradient: Gradient(colors: [color.opacity(0.30), color.opacity(0.02)]),
                     startPoint: .top,
