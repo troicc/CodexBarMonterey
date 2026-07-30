@@ -55,8 +55,18 @@ assert "30d-tokens" in parser
 assert "StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)" in views
 assert "StrokeStyle(lineWidth: 3, lineJoin: .round, lineCap: .round)" not in views
 
+# The Monterey popover must stay close to the compact original menu footprint,
+# use a dark-blue material overlay, and avoid provider-colored full-card fills.
+assert "NSSize(width: 328, height: 520)" in popover
+assert "DashboardTheme.backgroundTop" in views
+assert "DashboardTheme.selection.opacity(0.88)" in views
+assert "DashboardTheme.cardStart" in views
+assert "ProviderBrand.color(for: dashboard.id).opacity(0.95)" not in views
+assert ".frame(height: switcherHeight)" in views
+assert ".frame(maxHeight: 174)" not in views
+
 # A newly created config must have the upstream versioned root shape, never `{}`.
 assert '"version": 1' in settings
 assert 'Data("{}\\n".utf8)' not in settings
 
-print("Original-style Monterey UI contract tests passed.")
+print("Compact dark-blue Monterey UI contract tests passed.")

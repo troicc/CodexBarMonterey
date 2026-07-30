@@ -10,6 +10,7 @@ struct VisualEffectView: NSViewRepresentable {
         view.material = material
         view.blendingMode = blendingMode
         view.state = .active
+        view.appearance = NSAppearance(named: .darkAqua)
         return view
     }
 
@@ -17,17 +18,47 @@ struct VisualEffectView: NSViewRepresentable {
         nsView.material = material
         nsView.blendingMode = blendingMode
         nsView.state = .active
+        nsView.appearance = NSAppearance(named: .darkAqua)
     }
+}
+
+private enum DashboardTheme {
+    static let popoverWidth: CGFloat = 328
+    static let popoverHeight: CGFloat = 520
+    static let detailWidth: CGFloat = 360
+    static let detailHeight: CGFloat = 430
+
+    static let backgroundTop = Color(red: 0.035, green: 0.075, blue: 0.19)
+    static let backgroundBottom = Color(red: 0.020, green: 0.040, blue: 0.115)
+    static let selection = Color(red: 0.31, green: 0.43, blue: 0.96)
+    static let cardStart = Color(red: 0.31, green: 0.40, blue: 0.88)
+    static let cardEnd = Color(red: 0.24, green: 0.27, blue: 0.66)
+    static let separator = Color.white.opacity(0.10)
 }
 
 struct DashboardPopoverView: View {
     @ObservedObject var store: DashboardStore
 
-    private let columns = Array(repeating: GridItem(.flexible(minimum: 72), spacing: 8), count: 4)
+    private let columns = Array(repeating: GridItem(.flexible(minimum: 58), spacing: 6), count: 4)
+
+    private var visibleSwitcherRows: Int {
+        let visibleItems = min(store.snapshots.count + 1, 8)
+        return max(1, (visibleItems + 3) / 4)
+    }
+
+    private var switcherHeight: CGFloat {
+        CGFloat(visibleSwitcherRows * 48 + max(0, visibleSwitcherRows - 1) * 6)
+    }
 
     var body: some View {
         ZStack {
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+                .ignoresSafeArea()
+            LinearGradient(
+                gradient: Gradient(colors: [DashboardTheme.backgroundTop, DashboardTheme.backgroundBottom]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing)
+                .opacity(0.92)
                 .ignoresSafeArea()
             VStack(spacing: 0) {
                 providerSwitcher
@@ -36,16 +67,16 @@ struct DashboardPopoverView: View {
                 divider
                 footer
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
         }
-        .frame(width: 590, height: 720)
+        .frame(width: DashboardTheme.popoverWidth, height: DashboardTheme.popoverHeight)
         .preferredColorScheme(.dark)
     }
 
     private var providerSwitcher: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            LazyVGrid(columns: columns, spacing: 8) {
+            LazyVGrid(columns: columns, spacing: 6) {
                 overviewButton
                 ForEach(store.snapshots) { snapshot in
                     ProviderSwitcherButton(
@@ -54,39 +85,39 @@ struct DashboardPopoverView: View {
                         action: { store.select(snapshot) })
                 }
             }
-            .padding(.vertical, 2)
+            .padding(.vertical, 0)
         }
-        .frame(maxHeight: 174)
+        .frame(height: switcherHeight)
     }
 
     private var overviewButton: some View {
         Button(action: { store.onOpenAllDetails?() }) {
             VStack(spacing: 5) {
                 Image(systemName: "square.grid.2x2")
-                    .font(.system(size: 20, weight: .medium))
+                    .font(.system(size: 17, weight: .medium))
                 Text("Overview")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .lineLimit(1)
             }
             .foregroundColor(.white.opacity(0.82))
-            .frame(maxWidth: .infinity, minHeight: 58)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.04)))
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.035)))
         }
         .buttonStyle(PlainButtonStyle())
     }
 
     private var divider: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.14))
+            .fill(DashboardTheme.separator)
             .frame(height: 1)
-            .padding(.vertical, 10)
+            .padding(.vertical, 7)
     }
 
     @ViewBuilder
     private var selectedContent: some View {
         if let dashboard = store.selectedDashboard, let snapshot = store.selectedSnapshot {
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 9) {
                     ProviderHeaderView(snapshot: snapshot, dashboard: dashboard)
                     if let error = dashboard.errorMessage {
                         ErrorCard(message: error, providerID: dashboard.id) {
@@ -101,7 +132,7 @@ struct DashboardPopoverView: View {
                 .padding(.bottom, 4)
             }
         } else if store.isRefreshing {
-            VStack(spacing: 12) {
+            VStack(spacing: 8) {
                 ProgressView()
                 Text("Refreshing providers…")
                     .foregroundColor(.secondary)
@@ -131,7 +162,7 @@ struct DashboardPopoverView: View {
     }
 
     private var footer: some View {
-        VStack(spacing: 2) {
+        VStack(spacing: 0) {
             DashboardActionRow(
                 title: "Usage Dashboard",
                 symbol: "chart.bar.xaxis",
@@ -175,29 +206,29 @@ private struct ProviderSwitcherButton: View {
         Button(action: action) {
             VStack(spacing: 5) {
                 Image(systemName: ProviderBrand.symbol(for: snapshot.provider))
-                    .font(.system(size: 21, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(selected ? .white : ProviderBrand.color(for: snapshot.provider))
                 Text(snapshot.displayName)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
                 if let percent = snapshot.maximumUsedPercent {
                     Capsule()
                         .fill(ProviderBrand.color(for: snapshot.provider).opacity(0.7))
-                        .frame(width: 28, height: 3)
+                        .frame(width: 24, height: 3)
                         .overlay(alignment: .leading) {
                             Capsule()
                                 .fill(Color.white.opacity(0.9))
-                                .frame(width: max(2, 28 * CGFloat(min(100, percent) / 100)), height: 3)
+                                .frame(width: max(2, 24 * CGFloat(min(100, percent) / 100)), height: 3)
                         }
                 }
             }
             .foregroundColor(.white.opacity(0.78))
-            .frame(maxWidth: .infinity, minHeight: 58)
+            .frame(maxWidth: .infinity, minHeight: 48)
             .padding(.horizontal, 3)
             .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(selected ? ProviderBrand.color(for: snapshot.provider).opacity(0.92) : Color.white.opacity(0.03)))
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(selected ? DashboardTheme.selection.opacity(0.88) : Color.white.opacity(0.025)))
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -213,18 +244,18 @@ private struct ProviderHeaderView: View {
                 Circle().fill(ProviderBrand.color(for: snapshot.provider).opacity(0.22))
                 Image(systemName: ProviderBrand.symbol(for: snapshot.provider))
                     .foregroundColor(ProviderBrand.color(for: snapshot.provider))
-                    .font(.system(size: 19, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
             }
-            .frame(width: 38, height: 38)
+            .frame(width: 30, height: 30)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
                     Text(dashboard.title)
-                        .font(.system(size: 21, weight: .bold))
+                        .font(.system(size: 16, weight: .bold))
                     if let source = dashboard.source {
                         Text(source)
-                            .font(.system(size: 10, weight: .semibold))
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
+                            .font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
                             .background(Capsule().fill(Color.white.opacity(0.10)))
                     }
                 }
@@ -262,9 +293,9 @@ private struct ErrorCard: View {
             Button(providerID == "zai" ? "Configure z.ai API token" : "Open provider settings", action: configure)
                 .buttonStyle(CompactProminentButtonStyle(color: ProviderBrand.color(for: providerID)))
         }
-        .padding(13)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.black.opacity(0.20)))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.yellow.opacity(0.25), lineWidth: 1))
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.24)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.yellow.opacity(0.22), lineWidth: 1))
     }
 }
 
@@ -274,10 +305,10 @@ struct DashboardSummaryCard: View {
 
     var body: some View {
         Button(action: openDetails) {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 if dashboard.metrics.isEmpty {
                     Text("No summary metrics returned")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundColor(.white.opacity(0.70))
                 } else {
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
@@ -288,10 +319,10 @@ struct DashboardSummaryCard: View {
                 }
                 if !dashboard.history.isEmpty {
                     MiniHistoryChart(points: dashboard.history, color: ProviderBrand.color(for: dashboard.id))
-                        .frame(height: 106)
+                        .frame(height: 78)
                 } else if !dashboard.quotas.isEmpty {
                     QuotaBarChart(quotas: dashboard.quotas, color: ProviderBrand.color(for: dashboard.id))
-                        .frame(height: 76)
+                        .frame(height: 58)
                 }
                 HStack(spacing: 4) {
                     let tokenTotal = dashboard.history.compactMap(\.tokens).reduce(0, +)
@@ -315,17 +346,17 @@ struct DashboardSummaryCard: View {
                         .lineLimit(1)
                 }
             }
-            .padding(15)
+            .padding(11)
             .background(
                 LinearGradient(
                     gradient: Gradient(colors: [
-                        ProviderBrand.color(for: dashboard.id).opacity(0.95),
-                        ProviderBrand.color(for: dashboard.id).opacity(0.60),
+                        DashboardTheme.cardStart,
+                        DashboardTheme.cardEnd,
                     ]),
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.18), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 11))
+            .overlay(RoundedRectangle(cornerRadius: 11).stroke(Color.white.opacity(0.14), lineWidth: 1))
         }
         .buttonStyle(PlainButtonStyle())
     }
@@ -337,10 +368,10 @@ private struct MetricView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(metric.title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(.white.opacity(0.82))
             Text(metric.value)
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(.system(size: 15, weight: .bold, design: .rounded))
                 .foregroundColor(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.65)
@@ -362,7 +393,7 @@ struct QuotaLaneView: View {
         VStack(spacing: 4) {
             HStack {
                 Text(lane.title)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                 Spacer()
                 Text(String(format: "%.0f%% used", lane.usedPercent))
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
@@ -376,7 +407,7 @@ struct QuotaLaneView: View {
                         .frame(width: geometry.size.width * CGFloat(lane.usedPercent / 100))
                 }
             }
-            .frame(height: 7)
+            .frame(height: 5)
             if let reset = lane.resetText {
                 HStack {
                     Text(reset)
@@ -401,7 +432,7 @@ private struct DashboardActionRow: View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: symbol)
-                    .frame(width: 18)
+                    .frame(width: 16)
                 Text(title)
                 Spacer()
                 if let shortcut {
@@ -411,8 +442,8 @@ private struct DashboardActionRow: View {
             }
             .font(.system(size: 13, weight: .medium))
             .foregroundColor(enabled ? .white.opacity(0.88) : .white.opacity(0.30))
-            .padding(.horizontal, 8)
-            .frame(height: 34)
+            .padding(.horizontal, 6)
+            .frame(height: 29)
             .contentShape(Rectangle())
         }
         .buttonStyle(DashboardRowButtonStyle())
@@ -489,21 +520,27 @@ struct ProviderDetailPanelView: View {
         ZStack {
             VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
                 .ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 14) {
+            LinearGradient(
+                gradient: Gradient(colors: [DashboardTheme.backgroundTop, DashboardTheme.backgroundBottom]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing)
+                .opacity(0.94)
+                .ignoresSafeArea()
+            VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(dashboard.title)
-                            .font(.system(size: 20, weight: .bold))
+                            .font(.system(size: 17, weight: .bold))
                         Text(dashboard.updatedText)
                             .font(.system(size: 11))
                             .foregroundColor(.white.opacity(0.5))
                     }
                     Spacer()
                     Image(systemName: ProviderBrand.symbol(for: dashboard.id))
-                        .font(.system(size: 26, weight: .semibold))
+                        .font(.system(size: 21, weight: .semibold))
                         .foregroundColor(ProviderBrand.color(for: dashboard.id))
                 }
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
                     ForEach(dashboard.metrics) { metric in
                         VStack(alignment: .leading, spacing: 3) {
                             Text(metric.title).font(.system(size: 10, weight: .semibold)).foregroundColor(.white.opacity(0.52))
@@ -516,7 +553,7 @@ struct ProviderDetailPanelView: View {
                 }
                 if !dashboard.history.isEmpty {
                     DetailedHistoryChart(points: dashboard.history, providerID: dashboard.id)
-                        .frame(height: 300)
+                        .frame(height: 210)
                 } else {
                     VStack(spacing: 10) {
                         ForEach(dashboard.quotas) { lane in
@@ -531,9 +568,9 @@ struct ProviderDetailPanelView: View {
                         .lineLimit(1)
                 }
             }
-            .padding(20)
+            .padding(14)
         }
-        .frame(width: 560, height: 590)
+        .frame(width: DashboardTheme.detailWidth, height: DashboardTheme.detailHeight)
         .preferredColorScheme(.dark)
     }
 }
@@ -545,9 +582,9 @@ private struct DetailedHistoryChart: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             MiniHistoryChart(points: points, color: ProviderBrand.color(for: providerID))
-                .frame(height: 150)
+                .frame(height: 102)
             LineHistoryChart(values: points.map { $0.tokens ?? $0.requests ?? 0 }, color: ProviderBrand.color(for: providerID))
-                .frame(height: 110)
+                .frame(height: 72)
             HStack {
                 Text(points.first?.label ?? "")
                 Spacer()
@@ -609,6 +646,12 @@ struct AllProvidersDashboardView: View {
         ZStack {
             VisualEffectView(material: .sidebar, blendingMode: .behindWindow)
                 .ignoresSafeArea()
+            LinearGradient(
+                gradient: Gradient(colors: [DashboardTheme.backgroundTop, DashboardTheme.backgroundBottom]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing)
+                .opacity(0.94)
+                .ignoresSafeArea()
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(filteredSnapshots) { snapshot in
@@ -630,7 +673,7 @@ struct AllProvidersDashboardView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .frame(minWidth: 760, minHeight: 560)
+        .frame(minWidth: 680, minHeight: 500)
         .task {
             if store.snapshots.isEmpty { await store.refresh() }
             for snapshot in filteredSnapshots.prefix(8) {

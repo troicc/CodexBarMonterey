@@ -5,7 +5,7 @@ import SwiftUI
 final class ProviderDetailPanelController: NSWindowController {
     init() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 590),
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 430),
             styleMask: [.titled, .closable, .resizable, .utilityWindow],
             backing: .buffered,
             defer: false)
