@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,12 +34,45 @@ final class Box {
     func urls(_ url: URL) {
         _ = url.host(percentEncoded: false)
         _ = url.appending(queryItems: [URLQueryItem(name: "x", value: "1")])
-        _ = url.appending(path: "api/test")
-        var copy = url
-        copy.append(path: "quota")
         _ = "a::b".split(separator: "::")
         _ = ".host".trimmingPrefix(".")
         _ = TimeZone(secondsFromGMT: 0) ?? .gmt
+    }
+}
+''')
+        write(core, "Providers/Devin/DevinUsageFetcher.swift", '''import Foundation
+func fetch(baseURL: URL, path: String) -> URL {
+    baseURL.appending(path: "api/\\(path)")
+}
+''')
+        write(core, "Providers/ElevenLabs/ElevenLabsUsageFetcher.swift", '''import Foundation
+func subscriptionURL(baseURL: URL) -> URL {
+    var url = baseURL
+    url.append(path: "user/subscription")
+    url.append(path: "v1/user/subscription")
+    return url
+}
+''')
+        write(core, "Providers/NeuralWatt/NeuralWattUsageFetcher.swift", '''import Foundation
+func quotaURL(baseURL: URL) -> URL {
+    var url = baseURL
+    url.append(path: "quota")
+    url.append(path: "v1/quota")
+    return url
+}
+''')
+        write(core, "Providers/Wayfinder/WayfinderSettingsReader.swift", '''import Foundation
+struct WayfinderSettingsReader {
+    func routerURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        self.appending(path: "router", to: self.baseURL(environment: environment))
+    }
+
+    private func baseURL(environment: [String: String]) -> URL {
+        URL(string: "http://127.0.0.1:8080")!
+    }
+
+    private func appending(path: String, to baseURL: URL) -> URL {
+        baseURL.appendingPathComponent(path)
     }
 }
 ''')
@@ -93,11 +127,20 @@ func store(storageKey: String) -> WKWebsiteDataStore {
         assert "MontereyStateLock" in basic
         assert ".montereyHost(percentEncoded:" in basic
         assert ".montereyAppending(queryItems:" in basic
-        assert ".appendingPathComponent(" in basic
-        assert ".appendPathComponent(" in basic
         assert ".montereySplit(separator:" in basic
         assert ".montereyTrimmingPrefix(" in basic
         assert "TimeZone(secondsFromGMT: 0)!" in basic
+
+        devin = (core / "Providers/Devin/DevinUsageFetcher.swift").read_text()
+        assert ".appendingPathComponent(" in devin
+        assert ".appending(path:" not in devin
+        eleven = (core / "Providers/ElevenLabs/ElevenLabsUsageFetcher.swift").read_text()
+        assert eleven.count(".appendPathComponent(") == 2
+        neural = (core / "Providers/NeuralWatt/NeuralWattUsageFetcher.swift").read_text()
+        assert neural.count(".appendPathComponent(") == 2
+        wayfinder = (core / "Providers/Wayfinder/WayfinderSettingsReader.swift").read_text()
+        assert 'self.appending(path: "router", to:' in wayfinder
+        assert "self.appendingPathComponent" not in wayfinder
 
         codex = (core / "Providers/Codex/CodexStatusProbe.swift").read_text()
         assert "montereyFirstRegexCaptures" in codex and "match[2]" in codex
@@ -111,7 +154,18 @@ func store(storageKey: String) -> WKWebsiteDataStore {
         assert "store = .default()" in webkit
         assert (core / "MontereyCompat.swift").exists()
 
-    print("Monterey patcher synthetic regression test passed.")
+        # Compile the exact path-rewrite regression fixtures. This catches semantic
+        # corruption that a string-only scan cannot detect (the previous failure
+        # changed a Wayfinder helper call into a URL method call on `self`).
+        subprocess.run([
+            "swiftc", "-typecheck",
+            str(core / "Providers/Devin/DevinUsageFetcher.swift"),
+            str(core / "Providers/ElevenLabs/ElevenLabsUsageFetcher.swift"),
+            str(core / "Providers/NeuralWatt/NeuralWattUsageFetcher.swift"),
+            str(core / "Providers/Wayfinder/WayfinderSettingsReader.swift"),
+        ], check=True)
+
+    print("Monterey patcher synthetic and semantic regression tests passed.")
 
 
 if __name__ == "__main__":

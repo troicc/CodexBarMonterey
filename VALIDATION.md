@@ -55,3 +55,10 @@ Validation added in this revision:
 A true AppKit/SwiftPM link and a macOS 12 runtime launch still require the macOS
 GitHub runner and Monterey hardware respectively; those cannot be honestly
 claimed from a Linux validation environment.
+
+## CompilerFix2: Wayfinder path rewrite regression
+
+The second GitHub Actions log reached `CodexBarCore` compilation after the macOS 12 availability backport, then failed because a global replacement changed the valid helper call
+`WayfinderSettingsReader.appending(path:to:)` into `self.appendingPathComponent(..., to: ...)`.
+
+CompilerFix2 removes global `appending(path:)` / `append(path:)` rewrites. It pins those conversions to the three v0.46.0 files that actually use the macOS 13 URL path APIs (Devin, ElevenLabs, and NeuralWatt), preserves Wayfinder's helper method, scans for the invalid `to:` rewrite, and type-checks transformed regression fixtures with `swiftc`.

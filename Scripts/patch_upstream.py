@@ -140,11 +140,15 @@ def transform_core_source(relative: Path, text: str) -> tuple[str, int]:
 
     # Foundation API spelling introduced in macOS 13. Older equivalents preserve
     # the relevant behavior for the upstream call sites in v0.46.0.
+    #
+    # IMPORTANT: URL.appending(path:) must not be replaced globally. CodexBar also
+    # has helpers such as WayfinderSettingsReader.appending(path:to:). A blind
+    # textual replacement changes those helpers into appendingPathComponent and
+    # produces an invalid call on a non-URL receiver. Path API replacements are
+    # therefore pinned to the exact v0.46.0 files reported by the Monterey compiler.
     literal_replacements = (
         (".host(percentEncoded:", ".montereyHost(percentEncoded:"),
         (".appending(queryItems:", ".montereyAppending(queryItems:"),
-        (".appending(path:", ".appendingPathComponent("),
-        (".append(path:", ".appendPathComponent("),
         (".trimmingPrefix(", ".montereyTrimmingPrefix("),
         ('split(separator: " - ")', 'montereySplit(separator: " - ")'),
         ('split(separator: "::")', 'montereySplit(separator: "::")'),
@@ -155,6 +159,26 @@ def transform_core_source(relative: Path, text: str) -> tuple[str, int]:
         if count:
             text = text.replace(old, new)
             changes += count
+
+    path_api_replacements: dict[Path, tuple[tuple[str, str, int], ...]] = {
+        Path("Providers/Devin/DevinUsageFetcher.swift"): (
+            (".appending(path:", ".appendingPathComponent(", 1),
+        ),
+        Path("Providers/ElevenLabs/ElevenLabsUsageFetcher.swift"): (
+            (".append(path:", ".appendPathComponent(", 2),
+        ),
+        Path("Providers/NeuralWatt/NeuralWattUsageFetcher.swift"): (
+            (".append(path:", ".appendPathComponent(", 2),
+        ),
+    }
+    for old, new, expected in path_api_replacements.get(relative, ()):
+        text, count = replace_required(
+            text,
+            old,
+            new,
+            label=f"{relative}: URL path API",
+            expected=expected)
+        changes += count
 
     text, regex_changes = backport_regex_apis(relative, text)
     changes += regex_changes
@@ -188,8 +212,7 @@ def scan_for_unavailable_apis(core: Path) -> None:
         ("Swift Regex matches", re.compile(r"\.matches\(of:")),
         ("URL.host(percentEncoded:)", re.compile(r"\.host\(percentEncoded:")),
         ("URL.appending(queryItems:)", re.compile(r"\.appending\(queryItems:")),
-        ("URL.appending(path:)", re.compile(r"\.appending\(path:")),
-        ("URL.append(path:)", re.compile(r"\.append\(path:")),
+        # URL path APIs are scanned separately in their known v0.46.0 files.
         ("String.trimmingPrefix", re.compile(r"\.trimmingPrefix\(")),
         ("multi-character String.split", re.compile(r"\.split\(separator:\s*\"(?: - |::)\"")),
         ("TimeZone.gmt", re.compile(r"\?\?\s*\.gmt\b")),
@@ -203,6 +226,35 @@ def scan_for_unavailable_apis(core: Path) -> None:
             for match in pattern.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1
                 failures.append(f"{source}:{line}: {label}: {match.group(0)}")
+
+    targeted_path_checks: tuple[tuple[Path, str, re.Pattern[str]], ...] = (
+        (Path("Providers/Devin/DevinUsageFetcher.swift"),
+         "URL.appending(path:)", re.compile(r"\.appending\(path:")),
+        (Path("Providers/ElevenLabs/ElevenLabsUsageFetcher.swift"),
+         "URL.append(path:)", re.compile(r"\.append\(path:")),
+        (Path("Providers/NeuralWatt/NeuralWattUsageFetcher.swift"),
+         "URL.append(path:)", re.compile(r"\.append\(path:")),
+    )
+    for relative, label, pattern in targeted_path_checks:
+        source = core / relative
+        if not source.exists():
+            failures.append(f"{source}: expected pinned v0.46.0 source file is missing")
+            continue
+        source_text = source.read_text()
+        for match in pattern.finditer(source_text):
+            line = source_text.count("\n", 0, match.start()) + 1
+            failures.append(f"{source}:{line}: {label}: {match.group(0)}")
+
+    # Detect the exact semantic corruption that caused the second CI failure.
+    # appendingPathComponent has no `to:` label and must only be called on URL.
+    suspicious_path_call = re.compile(
+        r"\.(?:appendingPathComponent|appendPathComponent)\([^\n)]*?,\s*to\s*:")
+    for source in sorted(core.rglob("*.swift")):
+        source_text = source.read_text()
+        for match in suspicious_path_call.finditer(source_text):
+            line = source_text.count("\n", 0, match.start()) + 1
+            failures.append(
+                f"{source}:{line}: invalid path API rewrite with `to:` label: {match.group(0)}")
 
     webkit = core / "OpenAIWeb/OpenAIDashboardWebsiteDataStore.swift"
     if webkit.exists():
