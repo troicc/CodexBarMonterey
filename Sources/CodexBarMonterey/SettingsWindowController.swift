@@ -1,321 +1,197 @@
 @preconcurrency import AppKit
+import SwiftUI
 
 @MainActor
-final class SettingsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
-    private let client: CLIClient
-    private let updater: UpdaterController
-    private let table = NSTableView()
-    private var providers: [ProviderDescriptor] = []
-    private let statusLabel = NSTextField(labelWithString: "")
-    private let setAPIKeyButton = NSButton(title: "Set API key…", target: nil, action: nil)
+final class SettingsWindowController: NSWindowController {
+    private let store: SettingsStore
 
     init(client: CLIClient, updater: UpdaterController) {
-        self.client = client
-        self.updater = updater
+        self.store = SettingsStore(client: client, updater: updater)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 480),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 980, height: 680),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false)
         window.title = "CodexBar Monterey Settings"
         window.center()
+        window.isReleasedWhenClosed = false
         super.init(window: window)
-        buildUI()
+        window.contentViewController = NSHostingController(rootView: SettingsRootView(store: store))
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func show() {
+    func show(selectedProviderID: String? = nil) {
+        if let selectedProviderID { store.requestSelection(selectedProviderID) }
         showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        Task { await reloadProviders() }
+        Task { await store.reloadProviders() }
+    }
+}
+
+@MainActor
+final class SettingsStore: ObservableObject {
+    enum Tab: String, CaseIterable, Identifiable {
+        case general = "General"
+        case providers = "Providers"
+        case advanced = "Advanced"
+        var id: String { rawValue }
     }
 
-    private func buildUI() {
-        guard let content = window?.contentView else { return }
-        let tabs = NSTabView(frame: content.bounds)
-        tabs.autoresizingMask = [.width, .height]
-        content.addSubview(tabs)
+    @Published var tab: Tab = .providers
+    @Published private(set) var providers: [ProviderDescriptor] = []
+    @Published var selectedProviderID: String?
+    @Published var apiKey = ""
+    @Published var revealAPIKey = false
+    @Published private(set) var status = "Select a provider to configure authentication."
+    @Published private(set) var isBusy = false
 
-        let general = NSTabViewItem(identifier: "general")
-        general.label = "General"
-        general.view = makeGeneralView()
-        tabs.addTabViewItem(general)
+    @Published private(set) var refreshInterval = Preferences.shared.refreshInterval
+    @Published private(set) var mergeIcons = Preferences.shared.mergeIcons
+    @Published private(set) var showPercentage = Preferences.shared.showPercentage
+    @Published private(set) var launchAtLogin = Preferences.shared.launchAtLogin
+    @Published private(set) var automaticUpdates = Preferences.shared.automaticUpdates
 
-        let providersTab = NSTabViewItem(identifier: "providers")
-        providersTab.label = "Providers"
-        providersTab.view = makeProvidersView()
-        tabs.addTabViewItem(providersTab)
+    private let client: CLIClient
+    private let updater: UpdaterController
+    private var requestedProviderID: String?
 
-        let advanced = NSTabViewItem(identifier: "advanced")
-        advanced.label = "Advanced"
-        advanced.view = makeAdvancedView()
-        tabs.addTabViewItem(advanced)
+    init(client: CLIClient, updater: UpdaterController) {
+        self.client = client
+        self.updater = updater
     }
 
-    private func makeGeneralView() -> NSView {
-        let view = NSView()
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 14
-        stack.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: view.topAnchor),
-        ])
-
-        let intervals: [(String, TimeInterval)] = [("1 minute", 60), ("2 minutes", 120), ("5 minutes", 300), ("15 minutes", 900), ("30 minutes", 1800)]
-        let popup = NSPopUpButton()
-        for entry in intervals { popup.addItem(withTitle: entry.0) }
-        if let index = intervals.firstIndex(where: { $0.1 == Preferences.shared.refreshInterval }) {
-            popup.selectItem(at: index)
-        }
-        popup.target = self
-        popup.action = #selector(refreshIntervalChanged(_:))
-        stack.addArrangedSubview(labeledRow("Refresh interval", control: popup))
-
-        stack.addArrangedSubview(checkBox("Merge provider icons", state: Preferences.shared.mergeIcons, action: #selector(mergeChanged(_:))))
-        stack.addArrangedSubview(checkBox("Show highest used percentage", state: Preferences.shared.showPercentage, action: #selector(percentageChanged(_:))))
-        stack.addArrangedSubview(checkBox("Launch at login", state: Preferences.shared.launchAtLogin, action: #selector(loginChanged(_:))))
-        stack.addArrangedSubview(checkBox("Automatically download updates", state: Preferences.shared.automaticUpdates, action: #selector(autoUpdatesChanged(_:))))
-        return view
+    var selectedProvider: ProviderDescriptor? {
+        guard let selectedProviderID else { return nil }
+        return providers.first(where: { $0.id == selectedProviderID })
     }
 
-    private func makeProvidersView() -> NSView {
-        let view = NSView()
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("provider"))
-        column.title = "Provider"
-        column.width = 430
-        table.addTableColumn(column)
-        table.headerView = nil
-        table.rowHeight = 30
-        table.dataSource = self
-        table.delegate = self
-        table.allowsMultipleSelection = false
-
-        let scroll = NSScrollView()
-        scroll.documentView = table
-        scroll.hasVerticalScroller = true
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(scroll)
-
-        let buttons = NSStackView()
-        buttons.orientation = .vertical
-        buttons.alignment = .leading
-        buttons.spacing = 6
-        buttons.translatesAutoresizingMaskIntoConstraints = false
-
-        let firstRow = NSStackView()
-        firstRow.orientation = .horizontal
-        firstRow.spacing = 8
-        firstRow.addArrangedSubview(button("Refresh list", #selector(refreshProviders)))
-        setAPIKeyButton.target = self
-        setAPIKeyButton.action = #selector(setAPIKey)
-        setAPIKeyButton.bezelStyle = .rounded
-        setAPIKeyButton.isEnabled = false
-        firstRow.addArrangedSubview(setAPIKeyButton)
-        firstRow.addArrangedSubview(button("Refresh browser session…", #selector(refreshBrowserSession)))
-        buttons.addArrangedSubview(firstRow)
-
-        let secondRow = NSStackView()
-        secondRow.orientation = .horizontal
-        secondRow.spacing = 8
-        secondRow.addArrangedSubview(button("Clear browser cache", #selector(clearBrowserSession)))
-        secondRow.addArrangedSubview(button("Open config file", #selector(openConfig)))
-        secondRow.addArrangedSubview(button("Provider docs", #selector(openDocs)))
-        buttons.addArrangedSubview(secondRow)
-        view.addSubview(buttons)
-
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.font = .systemFont(ofSize: 11)
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(statusLabel)
-
-        NSLayoutConstraint.activate([
-            scroll.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 18),
-            scroll.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -18),
-            scroll.topAnchor.constraint(equalTo: view.topAnchor, constant: 18),
-            scroll.bottomAnchor.constraint(equalTo: buttons.topAnchor, constant: -12),
-            buttons.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-            buttons.bottomAnchor.constraint(equalTo: statusLabel.topAnchor, constant: -8),
-            statusLabel.leadingAnchor.constraint(equalTo: scroll.leadingAnchor),
-            statusLabel.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -14),
-        ])
-        return view
+    func requestSelection(_ providerID: String) {
+        requestedProviderID = providerID
+        selectedProviderID = providerID
+        tab = .providers
     }
 
-    private func makeAdvancedView() -> NSView {
-        let view = NSView()
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            stack.topAnchor.constraint(equalTo: view.topAnchor),
-        ])
-        stack.addArrangedSubview(button("Check for updates", #selector(checkUpdates)))
-        stack.addArrangedSubview(button("Validate provider configuration", #selector(validateConfig)))
-        stack.addArrangedSubview(button("Open logs folder", #selector(openLogs)))
-        return view
-    }
-
-    func numberOfRows(in tableView: NSTableView) -> Int { providers.count }
-
-    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        let provider = providers[row]
-        let cell = NSTableCellView()
-
-        // Keep the checkbox separate from the provider label. In the old cell the
-        // checkbox occupied the full row, so every click toggled the provider and
-        // NSTableView never received a row-selection click. That made Set API key
-        // permanently report “Select a provider first.”
-        let toggle = NSButton(checkboxWithTitle: "", target: self, action: #selector(providerToggled(_:)))
-        toggle.state = provider.enabled ? .on : .off
-        toggle.tag = row
-        toggle.frame = NSRect(x: 8, y: 3, width: 24, height: 24)
-        toggle.toolTip = provider.enabled ? "Disable \(provider.name)" : "Enable \(provider.name)"
-        cell.addSubview(toggle)
-
-        let label = NSTextField(labelWithString: provider.name)
-        label.frame = NSRect(x: 38, y: 4, width: 380, height: 22)
-        label.lineBreakMode = .byTruncatingTail
-        cell.textField = label
-        cell.addSubview(label)
-        return cell
-    }
-
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        updateProviderSelectionStatus()
-    }
-
-    private func reloadProviders() async {
-        let selectedID = selectedProvider()?.id
+    func reloadProviders() async {
+        isBusy = true
+        defer { isBusy = false }
         do {
             providers = try await client.listProviders()
-            table.reloadData()
-            if let selectedID, let index = providers.firstIndex(where: { $0.id == selectedID }) {
-                table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-                table.scrollRowToVisible(index)
+            let target = requestedProviderID ?? selectedProviderID
+            if let target, providers.contains(where: { $0.id == target }) {
+                selectedProviderID = target
+            } else if selectedProviderID == nil {
+                selectedProviderID = providers.first?.id
             }
-            if table.selectedRow < 0 {
-                setAPIKeyButton.isEnabled = false
-                statusLabel.stringValue = "\(providers.count) providers detected. Click a provider name to configure it."
+            requestedProviderID = nil
+            if let selectedProvider {
+                status = "Selected \(selectedProvider.name) (provider ID: \(selectedProvider.id))."
             } else {
-                updateProviderSelectionStatus()
+                status = "\(providers.count) providers detected."
             }
         } catch {
-            setAPIKeyButton.isEnabled = false
-            statusLabel.stringValue = error.localizedDescription
+            status = error.localizedDescription
         }
     }
 
-    @objc private func providerToggled(_ sender: NSButton) {
-        guard providers.indices.contains(sender.tag) else { return }
-        table.selectRowIndexes(IndexSet(integer: sender.tag), byExtendingSelection: false)
-        let provider = providers[sender.tag]
-        statusLabel.stringValue = sender.state == .on
-            ? "Enabling \(provider.name)…"
-            : "Disabling \(provider.name)…"
+    func select(_ provider: ProviderDescriptor) {
+        selectedProviderID = provider.id
+        apiKey = ""
+        status = "Selected \(provider.name) (provider ID: \(provider.id))."
+    }
+
+    func setEnabled(_ enabled: Bool, provider: ProviderDescriptor) {
         Task {
+            isBusy = true
+            defer { isBusy = false }
             do {
-                try await client.setProvider(provider.id, enabled: sender.state == .on)
+                try await client.setProvider(provider.id, enabled: enabled)
                 NotificationCenter.default.post(name: .providerConfigurationChanged, object: provider.id)
                 await reloadProviders()
             } catch {
-                statusLabel.stringValue = error.localizedDescription
-                sender.state = provider.enabled ? .on : .off
+                status = error.localizedDescription
             }
         }
     }
 
-    @objc private func setAPIKey() {
-        guard let provider = selectedProvider() else {
-            statusLabel.stringValue = "Select a provider name first."
+    func pasteAPIKey() {
+        guard let value = NSPasteboard.general.string(forType: .string), !value.isEmpty else {
+            status = "Clipboard does not contain text."
             return
         }
-        let alert = NSAlert()
-        alert.messageText = "Set API key for \(provider.name)"
-        alert.informativeText = "The key is passed to the upstream CodexBarCLI over stdin and stored in its protected config file."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        let input = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
-        alert.accessoryView = input
-        guard alert.runModal() == .alertFirstButtonReturn, !input.stringValue.isEmpty else { return }
-        statusLabel.stringValue = "Saving API key for \(provider.name)…"
+        apiKey = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        status = "API key pasted. Choose Save & Verify."
+    }
+
+    func clearAPIKeyField() {
+        apiKey = ""
+        status = "API key field cleared."
+    }
+
+    func saveAndVerifyAPIKey() {
+        guard let provider = selectedProvider else {
+            status = "Select a provider first."
+            return
+        }
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            status = "Paste or type an API key first."
+            return
+        }
         Task {
+            isBusy = true
+            status = "Saving API key for \(provider.name)…"
+            defer { isBusy = false }
             do {
-                try await client.setAPIKey(input.stringValue, provider: provider.id)
+                try await client.setAPIKey(key, provider: provider.id)
+                status = "API key saved. Verifying \(provider.name)…"
+                let result = try await client.probeAPIProvider(provider.id)
+                apiKey = ""
+                status = result.isEmpty ? "\(provider.name) API key saved and verified." : result
                 NotificationCenter.default.post(name: .providerConfigurationChanged, object: provider.id)
                 await reloadProviders()
-                if provider.id == "zai" {
-                    statusLabel.stringValue = "z.ai key saved. Verifying the API connection…"
-                    do {
-                        _ = try await client.probeAPIProvider(provider.id)
-                        statusLabel.stringValue = "z.ai API key saved and verified."
-                    } catch {
-                        statusLabel.stringValue = "z.ai key was saved, but verification failed: \(error.localizedDescription)"
-                    }
-                } else {
-                    statusLabel.stringValue = "API key saved for \(provider.name)."
-                }
             } catch {
-                statusLabel.stringValue = error.localizedDescription
+                status = "Saved, but verification failed: \(error.localizedDescription)"
             }
         }
     }
 
-    @objc private func refreshBrowserSession() {
-        guard let provider = selectedProvider() else {
-            statusLabel.stringValue = "Select a provider first."
-            return
-        }
-        let alert = NSAlert()
-        alert.messageText = "Refresh browser session for \(provider.name)?"
-        alert.informativeText = "This invokes the upstream cookie importer and may show a macOS Keychain permission prompt. Existing cached cookies remain intact if import fails."
-        alert.addButton(withTitle: "Refresh")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+    func refreshBrowserSession() {
+        guard let provider = selectedProvider else { return }
         Task {
+            isBusy = true
+            defer { isBusy = false }
             do {
                 let result = try await client.refreshBrowserSession(provider: provider.id)
-                statusLabel.stringValue = result.isEmpty ? "Browser session refreshed for \(provider.name)." : result
+                status = result.isEmpty ? "Browser session refreshed for \(provider.name)." : result
+                NotificationCenter.default.post(name: .providerConfigurationChanged, object: provider.id)
             } catch {
-                statusLabel.stringValue = error.localizedDescription
+                status = error.localizedDescription
             }
         }
     }
 
-    @objc private func clearBrowserSession() {
-        guard let provider = selectedProvider() else {
-            statusLabel.stringValue = "Select a provider first."
-            return
-        }
-        let alert = NSAlert()
-        alert.messageText = "Clear cached browser session for \(provider.name)?"
-        alert.informativeText = "The next refresh will need a valid browser or manual session again."
-        alert.addButton(withTitle: "Clear")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+    func clearBrowserSession() {
+        guard let provider = selectedProvider else { return }
         Task {
+            isBusy = true
+            defer { isBusy = false }
             do {
                 let result = try await client.clearBrowserSession(provider: provider.id)
-                statusLabel.stringValue = result.isEmpty ? "Browser cache cleared for \(provider.name)." : result
+                status = result.isEmpty ? "Browser cache cleared for \(provider.name)." : result
             } catch {
-                statusLabel.stringValue = error.localizedDescription
+                status = error.localizedDescription
             }
         }
     }
 
-    @objc private func openConfig() {
+    func openProviderDocs() {
+        guard let provider = selectedProvider else { return }
+        NSWorkspace.shared.open(ProviderCatalog.documentationURL(for: provider.id))
+    }
+
+    func openConfig() {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let xdg = home.appendingPathComponent(".config/codexbar/config.json")
         let legacy = home.appendingPathComponent(".codexbar/config.json")
@@ -327,133 +203,302 @@ final class SettingsWindowController: NSWindowController, NSTableViewDataSource,
         } else {
             target = xdg
             do {
-                try FileManager.default.createDirectory(
-                    at: xdg.deletingLastPathComponent(),
-                    withIntermediateDirectories: true)
-                let emptyConfig = """
+                try FileManager.default.createDirectory(at: xdg.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let config = """
                 {
                   "version": 1,
                   "hooks": null,
                   "providers": []
                 }
                 """
-                try Data((emptyConfig + "\n").utf8).write(to: xdg, options: .atomic)
-                try FileManager.default.setAttributes(
-                    [.posixPermissions: 0o600],
-                    ofItemAtPath: xdg.path)
+                try Data((config + "\n").utf8).write(to: target, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
             } catch {
-                statusLabel.stringValue = "Could not create config file: \(error.localizedDescription)"
+                status = "Could not create config file: \(error.localizedDescription)"
                 return
             }
         }
         NSWorkspace.shared.open(target)
     }
 
-    @objc private func openDocs() {
-        guard table.selectedRow >= 0, providers.indices.contains(table.selectedRow) else { return }
-        let provider = providers[table.selectedRow]
-        NSWorkspace.shared.open(ProviderCatalog.documentationURL(for: provider.id))
-    }
-
-    @objc private func refreshProviders() { Task { await reloadProviders() } }
-    @objc private func checkUpdates() { updater.checkForUpdates() }
-
-    @objc private func validateConfig() {
+    func validateConfig() {
         Task {
-            do {
-                let result = try await client.validateConfig()
-                showText(title: "Configuration validation", text: result)
-            } catch {
-                showText(title: "Configuration validation failed", text: error.localizedDescription)
-            }
+            isBusy = true
+            defer { isBusy = false }
+            do { status = try await client.validateConfig() }
+            catch { status = error.localizedDescription }
         }
     }
 
-    @objc private func openLogs() {
+    func openLogs() {
         let logs = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/CodexBarMonterey")
         try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
         NSWorkspace.shared.open(logs)
     }
 
-    @objc private func refreshIntervalChanged(_ sender: NSPopUpButton) {
-        let values: [TimeInterval] = [60, 120, 300, 900, 1800]
-        guard values.indices.contains(sender.indexOfSelectedItem) else { return }
-        Preferences.shared.refreshInterval = values[sender.indexOfSelectedItem]
+    func checkUpdates() { updater.checkForUpdates() }
+
+    func setRefreshInterval(_ value: TimeInterval) {
+        refreshInterval = value
+        Preferences.shared.refreshInterval = value
         NotificationCenter.default.post(name: .preferencesChanged, object: nil)
     }
 
-    @objc private func mergeChanged(_ sender: NSButton) {
-        Preferences.shared.mergeIcons = sender.state == .on
+    func setMergeIcons(_ value: Bool) {
+        mergeIcons = value
+        Preferences.shared.mergeIcons = value
         NotificationCenter.default.post(name: .preferencesChanged, object: nil)
     }
 
-    @objc private func percentageChanged(_ sender: NSButton) {
-        Preferences.shared.showPercentage = sender.state == .on
+    func setShowPercentage(_ value: Bool) {
+        showPercentage = value
+        Preferences.shared.showPercentage = value
         NotificationCenter.default.post(name: .preferencesChanged, object: nil)
     }
 
-    @objc private func loginChanged(_ sender: NSButton) { Preferences.shared.launchAtLogin = sender.state == .on }
-
-    @objc private func autoUpdatesChanged(_ sender: NSButton) {
-        Preferences.shared.automaticUpdates = sender.state == .on
-        updater.setAutomatic(sender.state == .on)
+    func setLaunchAtLogin(_ value: Bool) {
+        launchAtLogin = value
+        Preferences.shared.launchAtLogin = value
     }
 
-    private func updateProviderSelectionStatus() {
-        guard let provider = selectedProvider() else {
-            setAPIKeyButton.isEnabled = false
-            statusLabel.stringValue = "Select a provider name first."
-            return
+    func setAutomaticUpdates(_ value: Bool) {
+        automaticUpdates = value
+        Preferences.shared.automaticUpdates = value
+        updater.setAutomatic(value)
+    }
+}
+
+private struct SettingsRootView: View {
+    @ObservedObject var store: SettingsStore
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $store.tab) {
+                ForEach(SettingsStore.Tab.allCases) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(SegmentedPickerStyle())
+            .frame(width: 430)
+            .padding(.vertical, 14)
+
+            Divider()
+
+            Group {
+                switch store.tab {
+                case .general: GeneralSettingsView(store: store)
+                case .providers: ProviderSettingsView(store: store)
+                case .advanced: AdvancedSettingsView(store: store)
+                }
+            }
         }
-        setAPIKeyButton.isEnabled = true
-        statusLabel.stringValue = "Selected \(provider.name) (provider ID: \(provider.id))."
+        .frame(minWidth: 900, minHeight: 620)
+        .task { await store.reloadProviders() }
     }
+}
 
-    private func selectedProvider() -> ProviderDescriptor? {
-        guard table.selectedRow >= 0, providers.indices.contains(table.selectedRow) else { return nil }
-        return providers[table.selectedRow]
-    }
+private struct GeneralSettingsView: View {
+    @ObservedObject var store: SettingsStore
+    private let intervals: [(String, TimeInterval)] = [
+        ("1 minute", 60), ("2 minutes", 120), ("5 minutes", 300), ("15 minutes", 900), ("30 minutes", 1800),
+    ]
 
-    private func button(_ title: String, _ action: Selector) -> NSButton {
-        let button = NSButton(title: title, target: self, action: action)
-        button.bezelStyle = .rounded
-        return button
-    }
-
-    private func checkBox(_ title: String, state: Bool, action: Selector) -> NSButton {
-        let button = NSButton(checkboxWithTitle: title, target: self, action: action)
-        button.state = state ? .on : .off
-        return button
-    }
-
-    private func labeledRow(_ title: String, control: NSView) -> NSView {
-        let row = NSStackView()
-        row.orientation = .horizontal
-        row.spacing = 12
-        let label = NSTextField(labelWithString: title)
-        label.frame.size.width = 140
-        row.addArrangedSubview(label)
-        row.addArrangedSubview(control)
-        return row
-    }
-
-    private func showText(title: String, text: String) {
-        let alert = NSAlert()
-        alert.messageText = title
-        let scroll = NSTextView.scrollableTextView()
-        scroll.frame = NSRect(x: 0, y: 0, width: 480, height: 260)
-        if let field = scroll.documentView as? NSTextView {
-            field.string = text
-            field.isEditable = false
-            field.isSelectable = true
-            field.isRichText = false
-            field.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-            field.textColor = .labelColor
-            field.backgroundColor = .textBackgroundColor
+    var body: some View {
+        Form {
+            Picker("Refresh interval", selection: Binding(
+                get: { store.refreshInterval },
+                set: store.setRefreshInterval))
+            {
+                ForEach(Array(intervals.enumerated()), id: \.offset) { _, entry in
+                    Text(entry.0).tag(entry.1)
+                }
+            }
+            Toggle("Merge provider icons", isOn: Binding(get: { store.mergeIcons }, set: store.setMergeIcons))
+            Toggle("Show highest used percentage", isOn: Binding(get: { store.showPercentage }, set: store.setShowPercentage))
+            Toggle("Launch at login", isOn: Binding(get: { store.launchAtLogin }, set: store.setLaunchAtLogin))
+            Toggle("Automatically download updates", isOn: Binding(get: { store.automaticUpdates }, set: store.setAutomaticUpdates))
         }
-        alert.accessoryView = scroll
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
+        .padding(28)
+    }
+}
+
+private struct ProviderSettingsView: View {
+    @ObservedObject var store: SettingsStore
+
+    var body: some View {
+        HStack(spacing: 0) {
+            providerList
+                .frame(width: 340)
+            Divider()
+            configurationPane
+        }
+    }
+
+    private var providerList: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Providers").font(.system(size: 17, weight: .bold))
+                Spacer()
+                Button(action: { Task { await store.reloadProviders() } }) {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(BorderlessButtonStyle())
+            }
+            .padding(16)
+            Divider()
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(store.providers) { provider in
+                        ProviderSettingsRow(
+                            provider: provider,
+                            selected: store.selectedProviderID == provider.id,
+                            select: { store.select(provider) },
+                            toggle: { store.setEnabled($0, provider: provider) })
+                    }
+                }
+                .padding(8)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var configurationPane: some View {
+        if let provider = store.selectedProvider {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            Circle().fill(ProviderBrand.color(for: provider.id).opacity(0.18))
+                            Image(systemName: ProviderBrand.symbol(for: provider.id))
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundColor(ProviderBrand.color(for: provider.id))
+                        }
+                        .frame(width: 48, height: 48)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(provider.name).font(.system(size: 22, weight: .bold))
+                            Text("Provider ID: \(provider.id)").font(.system(size: 11)).foregroundColor(.secondary)
+                        }
+                    }
+
+                    GroupBox(label: Text("API authentication").font(.headline)) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Paste the provider token below. The value is sent to the bundled upstream CLI over stdin and is never added to shell history.")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            HStack(spacing: 8) {
+                                Group {
+                                    if store.revealAPIKey {
+                                        TextField("Paste API key or token", text: $store.apiKey)
+                                    } else {
+                                        SecureField("Paste API key or token", text: $store.apiKey)
+                                    }
+                                }
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                Button(action: store.pasteAPIKey) {
+                                    Label("Paste", systemImage: "doc.on.clipboard")
+                                }
+                                Button(action: { store.revealAPIKey.toggle() }) {
+                                    Image(systemName: store.revealAPIKey ? "eye.slash" : "eye")
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                            HStack {
+                                Button("Save & Verify", action: store.saveAndVerifyAPIKey)
+                                    .keyboardShortcut(.defaultAction)
+                                    .disabled(store.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isBusy)
+                                Button("Clear field", action: store.clearAPIKeyField)
+                                Spacer()
+                            }
+                        }
+                        .padding(10)
+                    }
+
+                    GroupBox(label: Text("Browser and provider tools").font(.headline)) {
+                        HStack(spacing: 10) {
+                            Button("Refresh browser session", action: store.refreshBrowserSession)
+                            Button("Clear browser cache", action: store.clearBrowserSession)
+                            Button("Provider docs", action: store.openProviderDocs)
+                            Spacer()
+                        }
+                        .padding(10)
+                    }
+
+                    GroupBox(label: Text("Status").font(.headline)) {
+                        HStack(alignment: .top, spacing: 8) {
+                            if store.isBusy { ProgressView().scaleEffect(0.7) }
+                            Text(store.status)
+                                .font(.system(size: 12, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .padding(10)
+                    }
+                }
+                .padding(24)
+            }
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "sidebar.left").font(.system(size: 32)).foregroundColor(.secondary)
+                Text("Select a provider").font(.headline)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct ProviderSettingsRow: View {
+    let provider: ProviderDescriptor
+    let selected: Bool
+    let select: () -> Void
+    let toggle: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Toggle("", isOn: Binding(get: { provider.enabled }, set: toggle))
+                .labelsHidden()
+            Button(action: select) {
+                HStack(spacing: 9) {
+                    Image(systemName: ProviderBrand.symbol(for: provider.id))
+                        .foregroundColor(ProviderBrand.color(for: provider.id))
+                        .frame(width: 22)
+                    Text(provider.name)
+                        .lineLimit(1)
+                    Spacer()
+                    if selected { Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)) }
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 34)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .padding(.horizontal, 6)
+        .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Color.accentColor.opacity(0.18) : Color.clear))
+    }
+}
+
+private struct AdvancedSettingsView: View {
+    @ObservedObject var store: SettingsStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button("Check for updates", action: store.checkUpdates)
+            Button("Validate provider configuration", action: store.validateConfig)
+            Button("Open config file", action: store.openConfig)
+            Button("Open logs folder", action: store.openLogs)
+            GroupBox(label: Text("Command output")) {
+                ScrollView {
+                    Text(store.status)
+                        .font(.system(size: 11, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                }
+                .frame(minHeight: 200)
+            }
+            Spacer()
+        }
+        .padding(28)
     }
 }
 

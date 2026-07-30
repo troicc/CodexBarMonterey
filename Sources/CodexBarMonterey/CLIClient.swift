@@ -72,6 +72,29 @@ actor CLIClient {
         throw ClientError.commandFailed(result.status, result.stderr)
     }
 
+
+    /// Returns provider-specific usage/cost JSON for the graphical dashboard.
+    /// Some providers expose their history in the usage payload, while local
+    /// Codex/Claude scans expose it through `cost`; both are accepted here.
+    func dashboardSupplementJSON(provider: String) async -> String? {
+        let commands: [[String]] = [
+            ["cost", "--provider", provider, "--format", "json", "--pretty"],
+            ["--provider", provider, "--format", "json", "--json-only", "--status"],
+        ]
+        var payloads: [Any] = []
+        for arguments in commands {
+            guard let result = try? await run(arguments: arguments, timeout: 180, acceptNonZero: true) else { continue }
+            let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, let data = text.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) else { continue }
+            payloads.append(json)
+        }
+        guard !payloads.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: payloads, options: [.sortedKeys])
+        else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     func listProviders() async throws -> [ProviderDescriptor] {
         // Prefer the current machine-readable command, then retain a text fallback for
         // older upstream tags so the shell can follow the engine without a lockstep UI patch.

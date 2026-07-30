@@ -253,6 +253,39 @@ enum ProviderCatalog {
         let slug = slugs[id] ?? id
         return URL(string: "https://github.com/steipete/CodexBar/blob/main/docs/\(slug).md")!
     }
+
+    static func dashboardURL(for id: String) -> URL? {
+        let urls: [String: String] = [
+            "codex": "https://chatgpt.com/codex/settings/usage",
+            "openai": "https://platform.openai.com/usage",
+            "claude": "https://console.anthropic.com/settings/usage",
+            "cursor": "https://www.cursor.com/settings",
+            "gemini": "https://aistudio.google.com/usage",
+            "copilot": "https://github.com/settings/copilot",
+            "zai": "https://z.ai/manage-apikey/apikey-list",
+            "minimax": "https://platform.minimax.io/user-center/payment/billing",
+            "openrouter": "https://openrouter.ai/activity",
+            "deepseek": "https://platform.deepseek.com/usage",
+            "mistral": "https://console.mistral.ai/usage",
+            "bedrock": "https://console.aws.amazon.com/cost-management/home",
+        ]
+        return urls[id].flatMap(URL.init(string:))
+    }
+
+    static func statusURL(for id: String) -> URL? {
+        let urls: [String: String] = [
+            "codex": "https://status.openai.com",
+            "openai": "https://status.openai.com",
+            "claude": "https://status.anthropic.com",
+            "cursor": "https://status.cursor.com",
+            "gemini": "https://status.cloud.google.com",
+            "copilot": "https://www.githubstatus.com",
+            "zai": "https://status.z.ai",
+            "openrouter": "https://status.openrouter.ai",
+            "bedrock": "https://health.aws.amazon.com/health/status",
+        ]
+        return urls[id].flatMap(URL.init(string:))
+    }
 }
 
 enum JSONCoding {

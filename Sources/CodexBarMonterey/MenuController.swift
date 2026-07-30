@@ -1,107 +1,142 @@
 @preconcurrency import AppKit
 
 @MainActor
-final class MenuController: NSObject, NSMenuDelegate {
+final class MenuController: NSObject {
     private let client: CLIClient
     private let updater: UpdaterController
+    private let store: DashboardStore
+    private let popover: DashboardPopoverController
+    private let detailPanel = ProviderDetailPanelController()
+
     private var mergedItem: NSStatusItem?
     private var providerItems: [String: NSStatusItem] = [:]
-    private var snapshots: [ProviderSnapshot] = []
+    private var buttonProviders: [ObjectIdentifier: String] = [:]
     private var refreshTimer: Timer?
-    private var isRefreshing = false
-    private var lastError: Error?
+
     private lazy var settings = SettingsWindowController(client: client, updater: updater)
-    private lazy var details = DetailsWindowController(client: client)
+    private lazy var details = DetailsWindowController(store: store)
 
     init(client: CLIClient, updater: UpdaterController) {
         self.client = client
         self.updater = updater
+        self.store = DashboardStore(client: client)
+        self.popover = DashboardPopoverController(store: store)
         super.init()
-        NotificationCenter.default.addObserver(self, selector: #selector(preferencesChanged), name: .preferencesChanged, object: nil)
+
+        store.onOpenSettings = { [weak self] in
+            self?.popover.close()
+            self?.settings.show(selectedProviderID: self?.store.selectedSnapshot?.provider)
+        }
+        store.onOpenAllDetails = { [weak self] in
+            self?.popover.close()
+            self?.details.showUsage(provider: nil, displayName: nil)
+        }
+        store.onOpenProviderDetails = { [weak self] providerID in
+            guard let self,
+                  let snapshot = self.store.snapshots.first(where: { $0.provider == providerID || $0.id == providerID })
+            else { return }
+            self.detailPanel.show(dashboard: self.store.dashboard(for: snapshot))
+        }
+        store.onCheckUpdates = { [weak self] in self?.updater.checkForUpdates() }
+        store.onQuit = { NSApp.terminate(nil) }
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(preferencesChanged),
+            name: .preferencesChanged,
+            object: nil)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(providerConfigurationChanged(_:)),
             name: .providerConfigurationChanged,
             object: nil)
+
         rebuildStatusItems()
         scheduleTimer()
         Task { await refresh() }
     }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
     @objc private func preferencesChanged() {
         rebuildStatusItems()
         scheduleTimer()
-        render()
+        renderStatusItems()
     }
 
     @objc private func providerConfigurationChanged(_ notification: Notification) {
         Task { await refresh() }
     }
 
-
     private func scheduleTimer() {
         refreshTimer?.invalidate()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: Preferences.shared.refreshInterval, repeats: true) { [weak self] _ in
+        refreshTimer = Timer.scheduledTimer(
+            withTimeInterval: Preferences.shared.refreshInterval,
+            repeats: true)
+        { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
     }
 
-    func refresh() async {
-        guard !isRefreshing else { return }
-        isRefreshing = true
-        render()
-        do {
-            snapshots = try await client.fetchEnabled(status: true)
-                .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-            lastError = nil
-        } catch {
-            lastError = error
-        }
-        isRefreshing = false
+    private func refresh() async {
+        await store.refresh()
         rebuildStatusItems()
-        render()
+        renderStatusItems()
     }
 
     private func rebuildStatusItems() {
-        if Preferences.shared.mergeIcons {
+        buttonProviders.removeAll()
+        if Preferences.shared.mergeIcons || store.snapshots.isEmpty {
             providerItems.values.forEach { NSStatusBar.system.removeStatusItem($0) }
             providerItems.removeAll()
             if mergedItem == nil {
-                mergedItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-                mergedItem?.autosaveName = "codexbar-monterey-merged"
-                mergedItem?.menu = makeMenu(for: nil)
+                let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+                item.autosaveName = "codexbar-monterey-merged"
+                configureAction(for: item, providerID: nil)
+                mergedItem = item
             }
         } else {
             if let mergedItem {
                 NSStatusBar.system.removeStatusItem(mergedItem)
                 self.mergedItem = nil
             }
-            let desired = Set(snapshots.map(\.id))
+            let desired = Set(store.snapshots.map(\.id))
             let staleKeys = providerItems.keys.filter { !desired.contains($0) }
             for key in staleKeys {
-                guard let item = providerItems.removeValue(forKey: key) else { continue }
-                NSStatusBar.system.removeStatusItem(item)
+                guard let stale = providerItems.removeValue(forKey: key) else { continue }
+                NSStatusBar.system.removeStatusItem(stale)
             }
-            for snapshot in snapshots where providerItems[snapshot.id] == nil {
+            for snapshot in store.snapshots where providerItems[snapshot.id] == nil {
                 let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
                 item.autosaveName = "codexbar-monterey-\(snapshot.provider)"
-                item.menu = makeMenu(for: snapshot.id)
                 providerItems[snapshot.id] = item
+            }
+            for snapshot in store.snapshots {
+                if let item = providerItems[snapshot.id] {
+                    configureAction(for: item, providerID: snapshot.id)
+                }
             }
         }
     }
 
-    private func render() {
+    private func configureAction(for item: NSStatusItem, providerID: String?) {
+        guard let button = item.button else { return }
+        button.target = self
+        button.action = #selector(statusButtonClicked(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        if let providerID { buttonProviders[ObjectIdentifier(button)] = providerID }
+    }
+
+    private func renderStatusItems() {
         if let mergedItem {
-            configureButton(mergedItem.button, snapshots: snapshots)
-            mergedItem.menu = makeMenu(for: nil)
+            configureButton(mergedItem.button, snapshots: store.snapshots)
         }
-        for snapshot in snapshots {
-            guard let item = providerItems[snapshot.id] else { continue }
-            configureButton(item.button, snapshots: [snapshot])
-            item.menu = makeMenu(for: snapshot.id)
+        for snapshot in store.snapshots {
+            if let item = providerItems[snapshot.id] {
+                configureButton(item.button, snapshots: [snapshot])
+            }
         }
     }
 
@@ -116,9 +151,18 @@ final class MenuController: NSObject, NSMenuDelegate {
             button.image = meterImage(percent: highest ?? 0, failed: snapshots.allSatisfy(\.isFailed))
             button.image?.isTemplate = true
         }
-        if isRefreshing { button.toolTip = "Refreshing…" }
-        else if let lastError { button.toolTip = lastError.localizedDescription }
-        else { button.toolTip = snapshots.map(\.displayName).joined(separator: ", ") }
+        if store.isRefreshing {
+            button.toolTip = "Refreshing…"
+        } else if let error = store.lastError {
+            button.toolTip = error
+        } else {
+            button.toolTip = snapshots.isEmpty ? "CodexBar Monterey" : snapshots.map(\.displayName).joined(separator: ", ")
+        }
+    }
+
+    @objc private func statusButtonClicked(_ sender: NSStatusBarButton) {
+        let providerID = buttonProviders[ObjectIdentifier(sender)]
+        popover.toggle(relativeTo: sender, select: providerID)
     }
 
     private func meterImage(percent: Double, failed: Bool) -> NSImage {
@@ -130,120 +174,30 @@ final class MenuController: NSObject, NSMenuDelegate {
         let gap: CGFloat = 2
         let baseY: CGFloat = 2
         let maxHeight: CGFloat = 12
-        let path1 = NSBezierPath(roundedRect: NSRect(x: 3, y: baseY, width: barWidth, height: maxHeight), xRadius: 1.5, yRadius: 1.5)
-        NSColor.labelColor.withAlphaComponent(failed ? 0.25 : 0.20).setFill()
-        path1.fill()
-        let path2 = NSBezierPath(roundedRect: NSRect(x: 3 + barWidth + gap, y: baseY, width: barWidth, height: maxHeight), xRadius: 1.5, yRadius: 1.5)
-        path2.fill()
+        NSColor.labelColor.withAlphaComponent(failed ? 0.22 : 0.18).setFill()
+        NSBezierPath(
+            roundedRect: NSRect(x: 3, y: baseY, width: barWidth, height: maxHeight),
+            xRadius: 1.5,
+            yRadius: 1.5).fill()
+        NSBezierPath(
+            roundedRect: NSRect(x: 3 + barWidth + gap, y: baseY, width: barWidth, height: maxHeight),
+            xRadius: 1.5,
+            yRadius: 1.5).fill()
         NSColor.labelColor.setFill()
         let fillHeight = max(1, maxHeight * used)
-        NSBezierPath(roundedRect: NSRect(x: 3, y: baseY, width: barWidth, height: fillHeight), xRadius: 1.5, yRadius: 1.5).fill()
-        NSBezierPath(roundedRect: NSRect(x: 3 + barWidth + gap, y: baseY, width: barWidth, height: max(1, maxHeight * min(1, used * 0.72))), xRadius: 1.5, yRadius: 1.5).fill()
+        NSBezierPath(
+            roundedRect: NSRect(x: 3, y: baseY, width: barWidth, height: fillHeight),
+            xRadius: 1.5,
+            yRadius: 1.5).fill()
+        NSBezierPath(
+            roundedRect: NSRect(
+                x: 3 + barWidth + gap,
+                y: baseY,
+                width: barWidth,
+                height: max(1, maxHeight * min(1, used * 0.72))),
+            xRadius: 1.5,
+            yRadius: 1.5).fill()
         image.unlockFocus()
         return image
-    }
-
-    private func makeMenu(for snapshotID: String?) -> NSMenu {
-        let menu = NSMenu()
-        menu.delegate = self
-        let visible = snapshotID.flatMap { id in snapshots.first(where: { $0.id == id }).map { [$0] } } ?? snapshots
-
-        if visible.isEmpty {
-            let title = isRefreshing ? "Refreshing providers…" : (lastError?.localizedDescription ?? "No enabled providers")
-            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            menu.addItem(item)
-        } else {
-            for snapshot in visible {
-                let item = NSMenuItem()
-                item.view = ProviderMenuView(snapshot: snapshot)
-                menu.addItem(item)
-                let actions = NSMenuItem(title: snapshot.displayName, action: nil, keyEquivalent: "")
-                actions.isEnabled = true
-                let submenu = NSMenu()
-                // NSMenu only auto-resolves targets in the menu that owns the item.
-                // These actions live in a nested menu, so leaving target nil makes
-                // AppKit render every provider action disabled/grey.
-                submenu.autoenablesItems = false
-                addSubmenuItem(
-                    to: submenu,
-                    title: "Open full provider details…",
-                    action: #selector(openProviderDetails(_:)),
-                    representedObject: snapshot.provider)
-                addSubmenuItem(
-                    to: submenu,
-                    title: "Open cost details…",
-                    action: #selector(openProviderCost(_:)),
-                    representedObject: snapshot.provider)
-                addSubmenuItem(
-                    to: submenu,
-                    title: "Copy provider JSON",
-                    action: #selector(copyProviderJSON(_:)),
-                    representedObject: snapshot.id)
-                if let url = snapshot.status?.url {
-                    addSubmenuItem(
-                        to: submenu,
-                        title: "Open status page",
-                        action: #selector(openURL(_:)),
-                        representedObject: url)
-                }
-                actions.submenu = submenu
-                menu.addItem(actions)
-                menu.addItem(.separator())
-            }
-        }
-
-        if snapshotID == nil {
-            menu.addItem(withTitle: "Open all provider details…", action: #selector(openAllDetails), keyEquivalent: "d")
-            menu.addItem(withTitle: "Open all cost details…", action: #selector(openAllCostDetails), keyEquivalent: "")
-        }
-        menu.addItem(withTitle: "Refresh now", action: #selector(refreshAction), keyEquivalent: "r")
-        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
-        menu.addItem(withTitle: "Check for updates…", action: #selector(checkUpdates), keyEquivalent: "")
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit CodexBar Monterey", action: #selector(quit), keyEquivalent: "q")
-        for item in menu.items where item.action != nil { item.target = self }
-        return menu
-    }
-
-
-    private func addSubmenuItem(
-        to menu: NSMenu,
-        title: String,
-        action: Selector,
-        representedObject: Any
-    ) {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
-        item.target = self
-        item.representedObject = representedObject
-        item.isEnabled = true
-        menu.addItem(item)
-    }
-
-    @objc private func refreshAction() { Task { await refresh() } }
-    @objc private func openAllDetails() { details.showUsage(provider: nil, displayName: nil) }
-    @objc private func openAllCostDetails() { details.showCost(provider: nil, displayName: nil) }
-    @objc private func openProviderDetails(_ sender: NSMenuItem) {
-        guard let provider = sender.representedObject as? String else { return }
-        details.showUsage(provider: provider, displayName: ProviderCatalog.displayName(for: provider))
-    }
-    @objc private func openProviderCost(_ sender: NSMenuItem) {
-        guard let provider = sender.representedObject as? String else { return }
-        details.showCost(provider: provider, displayName: ProviderCatalog.displayName(for: provider))
-    }
-    @objc private func openSettings() { settings.show() }
-    @objc private func checkUpdates() { updater.checkForUpdates() }
-    @objc private func quit() { NSApp.terminate(nil) }
-
-    @objc private func copyProviderJSON(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String,
-              let json = snapshots.first(where: { $0.id == id })?.rawJSON else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(json, forType: .string)
-    }
-
-    @objc private func openURL(_ sender: NSMenuItem) {
-        guard let url = sender.representedObject as? URL else { return }
-        NSWorkspace.shared.open(url)
     }
 }
