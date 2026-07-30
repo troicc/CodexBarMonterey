@@ -82,11 +82,13 @@ final class DetailsWindowController: NSWindowController {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = true
         textView.minSize = NSSize(width: 0, height: scrollView.contentSize.height)
-        textView.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        textView.maxSize = NSSize(
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude)
         textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.containerSize = NSSize(
-            width: .greatestFiniteMagnitude,
-            height: .greatestFiniteMagnitude)
+            width: CGFloat.greatestFiniteMagnitude,
+            height: CGFloat.greatestFiniteMagnitude)
     }
 
     private func reload() {

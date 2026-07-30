@@ -26,6 +26,11 @@ assert 'try Data("{}\\n".utf8)' not in settings
 assert "NSTextView.scrollableTextView()" in details
 assert "textView.textColor = .labelColor" in details
 assert "window?.makeKeyAndOrderFront(nil)" in details
+# NSSize expects CGFloat. Swift 6.3 sees both CGFloat and Double candidates for
+# an unqualified `.greatestFiniteMagnitude`, so keep the scalar type explicit.
+assert details.count("CGFloat.greatestFiniteMagnitude") >= 4
+assert "width: .greatestFiniteMagnitude" not in details
+assert "height: .greatestFiniteMagnitude" not in details
 
 # Nested menu actions must have explicit targets or AppKit disables them.
 assert "submenu.autoenablesItems = false" in menu
