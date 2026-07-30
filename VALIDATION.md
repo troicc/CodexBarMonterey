@@ -24,3 +24,34 @@ Not possible in this Linux delivery environment:
 Those checks are explicit gates in the included macOS 26 GitHub Actions workflows and
 `Scripts/smoke_test_app.sh`. A release should not be treated as verified for Monterey until the
 workflow succeeds and the app is exercised on both Intel and Apple Silicon macOS 12.6.x.
+
+## 2026-07-30 real GitHub Actions failure remediation
+
+The first public build reached Swift compilation successfully, then reported 221
+availability diagnostics across 42 `CodexBarCore` files. The failure was not the
+Node.js Actions warning. The source engine still used APIs introduced in macOS
+13/14 after only its package deployment declaration had been lowered.
+
+This revision adds a deterministic source backport performed by
+`Scripts/patch_upstream.py` after the fixed upstream tag is fetched:
+
+- Swift `Duration` / `ContinuousClock` are replaced by the Foundation-backed
+  `MontereyDuration` / `MontereyContinuousClock` compatibility types.
+- `OSAllocatedUnfairLock` is replaced by an `NSLock`-backed state lock.
+- Swift Regex call sites are converted to `NSRegularExpression` helpers.
+- macOS 13 URL, String, and TimeZone convenience APIs use older equivalents.
+- the macOS 14 per-identifier WebKit store is availability-guarded, with a
+  persistent default-store fallback on Monterey.
+- a post-patch source scan fails immediately if any known unavailable call site
+  remains.
+
+Validation added in this revision:
+
+- synthetic regression coverage for every unavailable API family in the log;
+- Swift type checking of `Patches/MontereyCompat.swift`;
+- Python syntax checks and shell syntax checks;
+- Node 24-compatible GitHub Actions versions retained.
+
+A true AppKit/SwiftPM link and a macOS 12 runtime launch still require the macOS
+GitHub runner and Monterey hardware respectively; those cannot be honestly
+claimed from a Linux validation environment.

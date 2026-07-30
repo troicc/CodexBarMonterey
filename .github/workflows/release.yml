@@ -48,6 +48,13 @@ jobs:
             echo "CODE_SIGN_IDENTITY=-" >> "$GITHUB_ENV"
           fi
 
+      - name: Validate Monterey source backport
+        run: |
+          python3 Scripts/test_monterey_patcher.py
+          swiftc -typecheck \
+            -target arm64-apple-macosx12.0 \
+            -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+            Patches/MontereyCompat.swift
       - name: Configure build
         env:
           SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}

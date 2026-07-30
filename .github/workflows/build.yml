@@ -25,6 +25,13 @@ jobs:
           assert match, output
           assert tuple(map(int, match.groups())) >= (6, 2), output
           PY
+      - name: Validate Monterey source backport
+        run: |
+          python3 Scripts/test_monterey_patcher.py
+          swiftc -typecheck \
+            -target arm64-apple-macosx12.0 \
+            -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
+            Patches/MontereyCompat.swift
       - name: Configure build
         env:
           SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}

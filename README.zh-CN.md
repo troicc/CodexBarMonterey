@@ -255,3 +255,18 @@ Scripts/smoke_test_app.sh "/Applications/CodexBar Monterey.app"
 - release 的 EdDSA appcast、Developer ID、notarization 与 stapling 链路。
 
 当前执行环境不是 macOS，因此不能在这里链接 AppKit/Sparkle，也不能冒充已经在 Monterey 真机运行。最终发布门槛是：GitHub macOS build workflow 通过，并在 macOS 12 Intel 与 Apple Silicon 上运行 `smoke_test_app.sh` 和上述认证测试。
+
+## Monterey 源码兼容层
+
+构建脚本不再只是把上游 `Package.swift` 的最低版本改成 macOS 12。下载固定的
+CodexBar provider engine 后，`Scripts/patch_upstream.py` 会自动回移植日志中已确认的
+macOS 13/14 API，包括 Swift Clock/Duration、现代锁、Swift Regex、新版 URL/String API
+和 WebKit data store。随后执行残留 API 扫描；若上游源码仍有已知的不兼容调用，构建会
+在 Swift 编译前显示具体文件和模式并终止。
+
+可在本地先运行补丁回归测试：
+
+```bash
+python3 Scripts/test_monterey_patcher.py
+swiftc -typecheck Patches/MontereyCompat.swift
+```

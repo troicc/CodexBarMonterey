@@ -1,15 +1,27 @@
-# Upstream compatibility patches
+# Upstream Monterey compatibility layer
 
-The build always performs three deterministic manifest edits before compiling:
+The build performs deterministic compatibility work after cloning the fixed
+upstream engine version:
 
-1. CodexBar's deployment target is lowered to macOS 12.
-2. SweetCookieKit's deployment target is lowered to macOS 12.
-3. Commander is vendored at the exact version requested by CodexBar, redirected to a local package, and lowered from its declared macOS 14 target to macOS 12.
+1. CodexBar, SweetCookieKit, and Commander deployment targets are lowered to
+   macOS 12.
+2. CodexBar is redirected to the exact vendored Commander checkout.
+3. `Scripts/patch_upstream.py` rewrites the macOS 13/14-only API families found
+   by the real GitHub Actions compiler log and installs `MontereyCompat.swift`.
+4. A deny-list scanner fails the build if any known unavailable call site
+   remains after rewriting.
 
-If a newer upstream release starts using APIs unavailable on Monterey, add ordinary `git apply` patches here:
+`MontereyCompat.swift` contains the back-deployed clock/duration, lock, URL,
+String, and regular-expression helpers. Keep it dependency-free and compatible
+with the macOS 12 SDK.
+
+Optional ordinary patches may still be added here for changes that cannot be
+expressed safely by the deterministic transformer:
 
 - `CodexBar.patch`
 - `SweetCookieKit.patch`
 - `Commander.patch`
 
-The build checks each patch with `git apply --check` before applying it. Keep patches versioned and narrow; do not modify `Vendor/` manually because it is recreated for every build.
+The build checks each optional patch with `git apply --check` before applying
+it. Do not modify `Vendor/` manually because it is recreated for every clean
+build.

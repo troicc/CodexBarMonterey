@@ -72,5 +72,5 @@ python3 "$ROOT/Scripts/patch_upstream.py" "$VENDOR/CodexBar"
 export CODEXBAR_USE_LOCAL_SWEETCOOKIEKIT=1
 export MACOSX_DEPLOYMENT_TARGET=12.0
 
-printf 'Fetched CodexBar engine %s with SweetCookieKit %s, Commander %s, and applied Monterey deployment patches.\n' \
+printf 'Fetched CodexBar engine %s with SweetCookieKit %s, Commander %s, and applied Monterey manifest and source compatibility patches.\n' \
   "$VERSION" "$SWEETCOOKIEKIT_VERSION" "$COMMANDER_VERSION"
