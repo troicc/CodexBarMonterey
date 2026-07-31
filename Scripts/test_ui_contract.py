@@ -81,9 +81,17 @@ assert 'zai-five-hour-trend-v2.json' in quota_trend
 assert 'abs(minutes - 300) <= 1' in quota_trend
 assert 'return values.max()' not in quota_trend
 assert "quota_trend_store_regression.swift" in (ROOT / "Scripts" / "test_cost_history_parser.sh").read_text()
-assert 'title: "5-hour trend"' in parser
-assert "Local 5-hour samples" in views
-assert 'fixedMaximum: dashboard.id == "zai" ? 100 : nil' in views
+# z.ai must use real hourly token usage rather than presenting locally sampled
+# quota percentages as token history.
+assert "private static func zaiPayload" in parser
+assert 'dictionary(named: "zaiUsage"' in parser
+assert 'title: "24h tokens"' in parser
+assert 'value: "Not exposed"' in parser
+assert 'title: "5-hour trend"' not in parser
+assert "Local 5-hour samples" not in views
+assert 'fixedMaximum: dashboard.id == "zai" ? 100 : nil' not in views
+assert "fixedMaximum: nil" in views
+assert 'Text("Hourly token usage")' in views
 assert '"30dtokens", "thirtydaytokens", "totaltokens"' not in parser
 assert "supplementalJSONBySnapshot" in store
 assert "fetchedSupplement ??" in store
