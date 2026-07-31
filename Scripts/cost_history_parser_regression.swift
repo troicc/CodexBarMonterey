@@ -7,7 +7,14 @@ func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     }
 }
 
-let payload = #"""
+let todayFormatter = DateFormatter()
+todayFormatter.calendar = Calendar(identifier: .gregorian)
+todayFormatter.locale = Locale(identifier: "en_US_POSIX")
+todayFormatter.timeZone = TimeZone.current
+todayFormatter.dateFormat = "yyyy-MM-dd"
+let todayKey = todayFormatter.string(from: Date())
+
+let payload = """
 [
   {
     "provider": "codex",
@@ -16,7 +23,7 @@ let payload = #"""
     "last30DaysCostUSD": 42.5,
     "daily": [
       {
-        "date": "2026-07-30",
+        "date": "\(todayKey)",
         "totalTokens": 674800,
         "totalCost": 1.5,
         "modelsUsed": ["gpt-5.6-sol"],
@@ -37,7 +44,7 @@ let payload = #"""
     "usage": {"secondary": {"usedPercent": 69}}
   }
 ]
-"""#
+"""
 
 for _ in 0..<100 {
     guard let parsed = CostHistoryPayloadParser.payload(provider: "codex", fromJSON: payload) else {
@@ -46,7 +53,9 @@ for _ in 0..<100 {
     }
     require(parsed.resolvedLast30DaysTokens == 1_100_000_000, "aggregate token count selected a daily row")
     require(parsed.resolvedLast30DaysCostUSD == 42.5, "aggregate cost was not stable")
-    require(parsed.sortedDaily.map(\.date) == ["2026-07-29", "2026-07-30"], "daily history was not sorted")
+    require(parsed.resolvedTodayTokens == 674_800, "today token count did not use today's daily row")
+    require(parsed.resolvedTodayCostUSD == 1.5, "today cost did not use today's daily row")
+    require(parsed.sortedDaily.last?.date == todayKey, "daily history was not sorted")
     require(parsed.topModel == "gpt-5.6-sol", "top model derivation was not deterministic")
 }
 
