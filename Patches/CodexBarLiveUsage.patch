@@ -1,0 +1,108 @@
+--- a/Sources/CodexBarCore/UsageFetcher.swift
++++ b/Sources/CodexBarCore/UsageFetcher.swift
+@@ -181,6 +181,81 @@
+     case unknown
+ }
+ 
++// Live-only provider payloads used by CodexBarMonterey's bundled CLI JSON.
++// These DTOs intentionally avoid adding Codable conformance to the upstream
++// domain models and are only emitted when the Monterey shell opts in.
++private struct MontereyDeepSeekDailyUsagePayload: Encodable {
++    let date: String
++    let totalTokens: Int
++    let cost: Double?
++    let requestCount: Int
++
++    init(_ value: DeepSeekDailyUsage) {
++        self.date = value.date
++        self.totalTokens = value.totalTokens
++        self.cost = value.cost
++        self.requestCount = value.requestCount
++    }
++}
++
++private struct MontereyDeepSeekUsagePayload: Encodable {
++    let todayTokens: Int
++    let currentMonthTokens: Int
++    let todayCost: Double?
++    let currentMonthCost: Double?
++    let requestCount: Int
++    let currentMonthRequestCount: Int
++    let topModel: String?
++    let daily: [MontereyDeepSeekDailyUsagePayload]
++    let currency: String
++    let updatedAt: Date
++
++    init(_ value: DeepSeekUsageSummary) {
++        self.todayTokens = value.todayTokens
++        self.currentMonthTokens = value.currentMonthTokens
++        self.todayCost = value.todayCost
++        self.currentMonthCost = value.currentMonthCost
++        self.requestCount = value.requestCount
++        self.currentMonthRequestCount = value.currentMonthRequestCount
++        self.topModel = value.topModel
++        self.daily = value.daily.map(MontereyDeepSeekDailyUsagePayload.init)
++        self.currency = value.currency
++        self.updatedAt = value.updatedAt
++    }
++}
++
++private struct MontereyZaiModelDataItemPayload: Encodable {
++    let modelName: String?
++    let tokensUsage: [Int?]
++
++    init(_ value: ZaiModelDataItem) {
++        self.modelName = value.modelName
++        self.tokensUsage = value.tokensUsage
++    }
++}
++
++private struct MontereyZaiModelUsagePayload: Encodable {
++    let xTime: [String]
++    let modelDataList: [MontereyZaiModelDataItemPayload]
++
++    init(_ value: ZaiModelUsageData) {
++        self.xTime = value.xTime
++        self.modelDataList = value.modelDataList.map(MontereyZaiModelDataItemPayload.init)
++    }
++}
++
++private struct MontereyZaiUsagePayload: Encodable {
++    let planName: String?
++    let modelUsage: MontereyZaiModelUsagePayload?
++    let updatedAt: Date
++
++    init(_ value: ZaiUsageSnapshot) {
++        self.planName = value.planName
++        self.modelUsage = value.modelUsage.map(MontereyZaiModelUsagePayload.init)
++        self.updatedAt = value.updatedAt
++    }
++}
++
+ public struct UsageSnapshot: Codable, Sendable {
+     public let primary: RateWindow?
+     public let secondary: RateWindow?
+@@ -230,6 +305,8 @@
+         case providerCost
+         case kiroUsage
+         case ampUsage
++        case zaiUsage
++        case deepseekUsage
+         case mimoUsage
+         case openRouterUsage
+         case sakanaPayAsYouGo
+@@ -420,6 +497,14 @@
+         try container.encodeIfPresent(self.providerCost, forKey: .providerCost)
+         try container.encodeIfPresent(self.kiroUsage, forKey: .kiroUsage)
+         try container.encodeIfPresent(self.ampUsage, forKey: .ampUsage)
++        if ProcessInfo.processInfo.environment["CODEXBAR_MONTEREY_INCLUDE_LIVE_USAGE"] == "1" {
++            if let zaiUsage = self.zaiUsage {
++                try container.encode(MontereyZaiUsagePayload(zaiUsage), forKey: .zaiUsage)
++            }
++            if let deepseekUsage = self.deepseekUsage {
++                try container.encode(MontereyDeepSeekUsagePayload(deepseekUsage), forKey: .deepseekUsage)
++            }
++        }
+         try container.encodeIfPresent(self.mimoUsage, forKey: .mimoUsage)
+         try container.encodeIfPresent(self.openRouterUsage, forKey: .openRouterUsage)
+         try container.encodeIfPresent(self.sakanaPayAsYouGo, forKey: .sakanaPayAsYouGo)

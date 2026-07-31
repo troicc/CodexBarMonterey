@@ -64,6 +64,8 @@ struct ProviderSnapshot: Decodable, Hashable, Identifiable {
     }
 
     var maximumUsedPercent: Double? {
+        // DeepSeek API-key mode exposes a balance sentinel, not a real quota window.
+        if provider == "deepseek" { return nil }
         let values = [usage?.primary?.usedPercent, usage?.secondary?.usedPercent, usage?.tertiary?.usedPercent]
             .compactMap { $0 }
         return values.max()

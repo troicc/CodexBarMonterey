@@ -47,7 +47,7 @@ struct DashboardPopoverView: View {
     }
 
     private var switcherHeight: CGFloat {
-        CGFloat(visibleSwitcherRows * 48 + max(0, visibleSwitcherRows - 1) * 6)
+        CGFloat(visibleSwitcherRows * 52 + max(0, visibleSwitcherRows - 1) * 6)
     }
 
     var body: some View {
@@ -100,7 +100,7 @@ struct DashboardPopoverView: View {
                     .lineLimit(1)
             }
             .foregroundColor(.white.opacity(0.82))
-            .frame(maxWidth: .infinity, minHeight: 48)
+            .frame(maxWidth: .infinity, minHeight: 52)
             .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.035)))
         }
         .buttonStyle(PlainButtonStyle())
@@ -124,15 +124,15 @@ struct DashboardPopoverView: View {
                             store.onOpenSettings?()
                         }
                     }
-                    if !dashboard.metrics.isEmpty || !dashboard.history.isEmpty {
-                        DashboardSummaryCard(dashboard: dashboard) {
-                            store.onOpenProviderDetails?(snapshot.provider)
-                        }
+                    DashboardSummaryCard(dashboard: dashboard) {
+                        store.onOpenProviderDetails?(snapshot.provider)
                     }
                     quotaSection(dashboard)
                 }
                 .padding(.bottom, 4)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .layoutPriority(1)
         } else if store.isRefreshing {
             VStack(spacing: 8) {
                 ProgressView()
@@ -214,25 +214,37 @@ private struct ProviderSwitcherButton: View {
                     .font(.system(size: 10, weight: .medium))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                if let percent = snapshot.maximumUsedPercent {
-                    Capsule()
-                        .fill(ProviderBrand.color(for: snapshot.provider).opacity(0.7))
-                        .frame(width: 24, height: 3)
-                        .overlay(alignment: .leading) {
-                            Capsule()
-                                .fill(Color.white.opacity(0.9))
-                                .frame(width: max(2, 24 * CGFloat(min(100, percent) / 100)), height: 3)
-                        }
-                }
+                SwitcherUsageBar(
+                    percent: snapshot.provider == "deepseek" ? nil : snapshot.maximumUsedPercent,
+                    color: ProviderBrand.color(for: snapshot.provider))
             }
             .foregroundColor(.white.opacity(0.78))
-            .frame(maxWidth: .infinity, minHeight: 48)
+            .frame(maxWidth: .infinity, minHeight: 52)
             .padding(.horizontal, 3)
             .background(
                 RoundedRectangle(cornerRadius: 9)
                     .fill(selected ? DashboardTheme.selection.opacity(0.88) : Color.white.opacity(0.025)))
         }
         .buttonStyle(PlainButtonStyle())
+    }
+}
+
+private struct SwitcherUsageBar: View {
+    let percent: Double?
+    let color: Color
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.10))
+                if let percent = percent {
+                    Capsule()
+                        .fill(color)
+                        .frame(width: geometry.size.width * CGFloat(max(0, min(100, percent)) / 100))
+                }
+            }
+        }
+        .frame(width: 24, height: 3)
     }
 }
 
@@ -323,15 +335,12 @@ struct DashboardSummaryCard: View {
                     MiniHistoryChart(
                         points: dashboard.history,
                         color: ProviderBrand.color(for: dashboard.id),
-                        fixedMaximum: dashboard.id == "zai" ? 100 : nil)
+                        fixedMaximum: nil)
                         .frame(height: 78)
                 }
                 HStack(spacing: 4) {
-                    if dashboard.id == "zai", !dashboard.history.isEmpty {
-                        Text("Local 5-hour samples")
-                    }
                     if let tokens = dashboard.historySummary?.tokens, tokens > 0 {
-                        Text("30d: \(compactNumber(tokens)) tokens")
+                        Text("\(dashboard.id == "zai" ? "24h" : (dashboard.id == "deepseek" ? "Month" : "30d")): \(compactNumber(tokens)) tokens")
                     }
                     if let requests = dashboard.historySummary?.requests, requests > 0 {
                         if dashboard.historySummary?.tokens != nil { Text("·") }
@@ -557,7 +566,7 @@ struct ProviderDetailPanelView: View {
                 }
                 if !dashboard.history.isEmpty {
                     if dashboard.id == "zai" {
-                        Text("Local 5-hour quota trend (used %)")
+                        Text("Hourly token usage")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(.white.opacity(0.58))
                     }
@@ -593,12 +602,12 @@ private struct DetailedHistoryChart: View {
             MiniHistoryChart(
                 points: points,
                 color: ProviderBrand.color(for: providerID),
-                fixedMaximum: providerID == "zai" ? 100 : nil)
+                fixedMaximum: nil)
                 .frame(height: 102)
             LineHistoryChart(
                 values: points.map { $0.tokens ?? $0.requests ?? 0 },
                 color: ProviderBrand.color(for: providerID),
-                fixedMaximum: providerID == "zai" ? 100 : nil)
+                fixedMaximum: nil)
                 .frame(height: 72)
             HStack {
                 Text(points.first?.label ?? "")
@@ -674,10 +683,8 @@ struct AllProvidersDashboardView: View {
                         let dashboard = store.dashboard(for: snapshot)
                         VStack(alignment: .leading, spacing: 10) {
                             ProviderHeaderView(snapshot: snapshot, dashboard: dashboard)
-                            if !dashboard.metrics.isEmpty || !dashboard.history.isEmpty {
-                                DashboardSummaryCard(dashboard: dashboard) {
-                                    store.onOpenProviderDetails?(snapshot.provider)
-                                }
+                            DashboardSummaryCard(dashboard: dashboard) {
+                                store.onOpenProviderDetails?(snapshot.provider)
                             }
                             ForEach(dashboard.quotas) { lane in
                                 QuotaLaneView(lane: lane, color: ProviderBrand.color(for: snapshot.provider))

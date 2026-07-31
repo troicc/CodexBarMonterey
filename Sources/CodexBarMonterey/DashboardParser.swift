@@ -12,10 +12,80 @@ enum DashboardParser {
         let costPayload = CostHistoryPayloadParser.payload(
             provider: snapshot.provider,
             fromJSON: supplementalJSON)
+        let deepSeek = snapshot.provider == "deepseek" ? deepSeekPayload(from: roots) : nil
+        let zai = snapshot.provider == "zai" ? zaiPayload(from: roots) : nil
         let costBackedProvider = snapshot.provider == "codex" || snapshot.provider == "claude"
+        let providerSpecific = snapshot.provider == "deepseek" || snapshot.provider == "zai"
 
         var metrics: [DashboardMetric] = []
-        if let costPayload = costPayload {
+        if let deepSeek {
+            metrics.append(DashboardMetric(
+                id: "today-tokens",
+                title: "Today tokens",
+                value: compact(deepSeek.todayTokens) ?? "0",
+                subtitle: requestSubtitle(deepSeek.todayRequests)))
+            appendCurrencyMetric(
+                &metrics,
+                id: "today-cost",
+                title: "Today cost",
+                value: deepSeek.todayCost,
+                currencyCode: deepSeek.currencyCode,
+                unavailableSubtitle: "DeepSeek did not return cost data")
+            metrics.append(DashboardMetric(
+                id: "month-tokens",
+                title: "Month tokens",
+                value: compact(deepSeek.monthTokens) ?? "0",
+                subtitle: requestSubtitle(deepSeek.monthRequests)))
+            appendCurrencyMetric(
+                &metrics,
+                id: "month-cost",
+                title: "Month cost",
+                value: deepSeek.monthCost,
+                currencyCode: deepSeek.currencyCode,
+                unavailableSubtitle: "DeepSeek did not return cost data")
+        } else if snapshot.provider == "deepseek" {
+            if let balance = deepSeekBalanceDescription(flattened) {
+                metrics.append(DashboardMetric(id: "balance", title: "Balance", value: balance))
+            }
+            metrics.append(DashboardMetric(
+                id: "deepseek-details",
+                title: "Tokens & cost",
+                value: snapshot.source == "api" ? "Session required" : "Unavailable",
+                subtitle: "Connect a signed-in DeepSeek Platform session"))
+        }
+
+        if let zai {
+            metrics.append(DashboardMetric(
+                id: "today-tokens",
+                title: "Today tokens",
+                value: compact(zai.todayTokens) ?? "0"))
+            metrics.append(DashboardMetric(
+                id: "24h-tokens",
+                title: "24h tokens",
+                value: compact(zai.totalTokens) ?? "0"))
+            metrics.append(DashboardMetric(
+                id: "models",
+                title: "Models",
+                value: String(zai.modelCount)))
+            metrics.append(DashboardMetric(
+                id: "cost",
+                title: "Cost",
+                value: "Not exposed",
+                subtitle: "z.ai has no cost summary endpoint"))
+        } else if snapshot.provider == "zai" {
+            metrics.append(DashboardMetric(
+                id: "hourly-tokens",
+                title: "Hourly tokens",
+                value: "Unavailable",
+                subtitle: "No model-usage history was returned"))
+            metrics.append(DashboardMetric(
+                id: "cost",
+                title: "Cost",
+                value: "Not exposed",
+                subtitle: "z.ai has no cost summary endpoint"))
+        }
+
+        if let costPayload {
             appendMetric(
                 &metrics,
                 id: "today-tokens",
@@ -40,10 +110,9 @@ enum DashboardParser {
                 cost: costPayload.resolvedLast30DaysCostUSD)
         }
 
-        // Cost-backed providers must use the typed cost payload above. Generic
-        // recursive matching is intentionally disabled for them because
-        // `totalTokens` occurs in every daily row as well as in the aggregate.
-        if !costBackedProvider {
+        // Cost-backed and provider-specific payloads have typed aggregate fields.
+        // Do not recursively match their daily/hourly rows as aggregate metrics.
+        if !costBackedProvider && !providerSpecific {
             appendMetric(&metrics, id: "today-spend", title: "Today", value: currency(findNumber(flattened, aliases: [
                 "todayspend", "todaycost", "costtoday", "dailyspend", "currentdayspend"
             ])))
@@ -65,7 +134,7 @@ enum DashboardParser {
         }
 
         let quotas = mergedQuotaLanes(snapshot: snapshot, roots: roots)
-        if metrics.count < 4 {
+        if metrics.count < 4, !providerSpecific {
             if snapshot.provider == "codex" {
                 if let remaining = snapshot.credits?.remaining,
                    remaining > 0 || snapshot.credits?.hasCredits == true
@@ -94,27 +163,37 @@ enum DashboardParser {
         let history: [DashboardHistoryPoint]
         let historySummary: DashboardHistorySummary?
         let topModel: String?
-        if let costPayload = costPayload {
+        if let deepSeek {
+            history = deepSeek.history
+            historySummary = DashboardHistorySummary(
+                spend: deepSeek.monthCost,
+                tokens: deepSeek.monthTokens,
+                requests: deepSeek.monthRequests)
+            topModel = deepSeek.topModel
+        } else if let zai {
+            history = zai.history
+            historySummary = DashboardHistorySummary(
+                spend: nil,
+                tokens: zai.totalTokens,
+                requests: nil)
+            topModel = zai.topModel
+        } else if let costPayload {
             history = costHistory(costPayload)
             historySummary = DashboardHistorySummary(
                 spend: costPayload.resolvedLast30DaysCostUSD,
                 tokens: costPayload.resolvedLast30DaysTokens,
                 requests: nil)
             topModel = costPayload.topModel
+        } else if providerSpecific {
+            history = []
+            historySummary = nil
+            topModel = nil
         } else {
             history = extractHistory(from: roots)
-            historySummary = snapshot.provider == "zai" ? nil : genericHistorySummary(history)
+            historySummary = genericHistorySummary(history)
             topModel = findString(flattened, aliases: [
                 "topmodel", "mostusedmodel", "leadingmodel"
             ])
-        }
-
-        if snapshot.provider == "zai", let current = history.last?.tokens {
-            metrics.insert(DashboardMetric(
-                id: "local-five-hour-trend",
-                title: "5-hour trend",
-                value: "\(Int(current.rounded()))% used",
-                subtitle: "Local samples of the 5-hour quota"), at: 0)
         }
 
         let updated = snapshot.usage?.updatedAt ?? snapshot.credits?.updatedAt
@@ -134,6 +213,144 @@ enum DashboardParser {
             errorMessage: error,
             dashboardURL: ProviderCatalog.dashboardURL(for: snapshot.provider),
             statusURL: snapshot.status?.url ?? ProviderCatalog.statusURL(for: snapshot.provider))
+    }
+
+    private struct DeepSeekPayload {
+        let todayTokens: Double
+        let monthTokens: Double
+        let todayCost: Double?
+        let monthCost: Double?
+        let todayRequests: Double
+        let monthRequests: Double
+        let currencyCode: String
+        let topModel: String?
+        let history: [DashboardHistoryPoint]
+    }
+
+    private struct ZaiPayload {
+        let todayTokens: Double
+        let totalTokens: Double
+        let modelCount: Int
+        let topModel: String?
+        let history: [DashboardHistoryPoint]
+    }
+
+    private static func deepSeekPayload(from roots: [Any]) -> DeepSeekPayload? {
+        guard let usage = dictionary(named: "deepseekUsage", in: roots) else { return nil }
+        let normalized = normalizedDictionary(usage)
+        guard let todayTokens = firstNumber(normalized, keys: ["todaytokens"]),
+              let monthTokens = firstNumber(normalized, keys: ["currentmonthtokens"]),
+              let todayRequests = firstNumber(normalized, keys: ["requestcount"]),
+              let monthRequests = firstNumber(normalized, keys: ["currentmonthrequestcount"])
+        else { return nil }
+
+        let rows = (normalized["daily"] as? [[String: Any]]) ?? []
+        let history = rows.compactMap(historyPoint)
+        return DeepSeekPayload(
+            todayTokens: todayTokens,
+            monthTokens: monthTokens,
+            todayCost: firstNumber(normalized, keys: ["todaycost"]),
+            monthCost: firstNumber(normalized, keys: ["currentmonthcost"]),
+            todayRequests: todayRequests,
+            monthRequests: monthRequests,
+            currencyCode: (normalized["currency"] as? String)?.uppercased() ?? "USD",
+            topModel: normalized["topmodel"] as? String,
+            history: Array(history.suffix(60)))
+    }
+
+    private static func zaiPayload(from roots: [Any]) -> ZaiPayload? {
+        guard let usage = dictionary(named: "zaiUsage", in: roots),
+              let modelUsage = normalizedDictionary(usage)["modelusage"] as? [String: Any]
+        else { return nil }
+        let normalized = normalizedDictionary(modelUsage)
+        let times = normalized["xtime"] as? [String] ?? []
+        let rows = normalized["modeldatalist"] as? [[String: Any]] ?? []
+        guard !times.isEmpty, !rows.isEmpty else { return nil }
+
+        var hourly = Array(repeating: 0.0, count: times.count)
+        var totalsByModel: [String: Double] = [:]
+        for row in rows {
+            let item = normalizedDictionary(row)
+            let name = (item["modelname"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let model = (name?.isEmpty == false ? name : nil) ?? "Unknown"
+            let values = item["tokensusage"] as? [Any] ?? []
+            var modelTotal = 0.0
+            for index in times.indices where index < values.count {
+                guard let value = numberValue(values[index]), value > 0 else { continue }
+                hourly[index] += value
+                modelTotal += value
+            }
+            totalsByModel[model, default: 0] += modelTotal
+        }
+
+        let history = times.indices.map { index in
+            DashboardHistoryPoint(label: zaiHistoryLabel(times[index]), tokens: hourly[index])
+        }
+        let todayTokens = zip(times, hourly).reduce(0.0) { partial, pair in
+            guard let date = zaiHourDate(pair.0), Calendar.current.isDateInToday(date) else { return partial }
+            return partial + pair.1
+        }
+        let totalTokens = hourly.reduce(0, +)
+        let topModel = totalsByModel.max(by: { $0.value < $1.value })?.key
+        return ZaiPayload(
+            todayTokens: todayTokens,
+            totalTokens: totalTokens,
+            modelCount: totalsByModel.keys.filter { $0 != "Unknown" }.count,
+            topModel: topModel,
+            history: Array(history.suffix(48)))
+    }
+
+    private static func dictionary(named name: String, in roots: [Any]) -> [String: Any]? {
+        let target = normalize(name)
+        func visit(_ value: Any) -> [String: Any]? {
+            if let dictionary = value as? [String: Any] {
+                for key in dictionary.keys.sorted() where normalize(key) == target {
+                    if let match = dictionary[key] as? [String: Any] { return match }
+                }
+                for key in dictionary.keys.sorted() {
+                    if let nested = dictionary[key], let match = visit(nested) { return match }
+                }
+            } else if let array = value as? [Any] {
+                for nested in array {
+                    if let match = visit(nested) { return match }
+                }
+            }
+            return nil
+        }
+        for root in roots {
+            if let match = visit(root) { return match }
+        }
+        return nil
+    }
+
+    private static func normalizedDictionary(_ dictionary: [String: Any]) -> [String: Any] {
+        var normalized: [String: Any] = [:]
+        for (key, value) in dictionary { normalized[normalize(key)] = value }
+        return normalized
+    }
+
+    private static func zaiHourDate(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter.date(from: value)
+    }
+
+    private static func zaiHistoryLabel(_ value: String) -> String {
+        guard let date = zaiHourDate(value) else { return String(value.suffix(5)) }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "MMM d HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private static func deepSeekBalanceDescription(_ values: [FlatValue]) -> String? {
+        findString(values, aliases: ["usageprimaryresetdescription", "resetdescription"])
+    }
+
+    private static func requestSubtitle(_ value: Double) -> String? {
+        guard value > 0, let formatted = compact(value) else { return nil }
+        return "\(formatted) requests"
     }
 
     private struct FlatValue {
@@ -330,6 +547,7 @@ enum DashboardParser {
     }
 
     private static func mergedQuotaLanes(snapshot: ProviderSnapshot, roots: [Any]) -> [DashboardQuotaLane] {
+        if snapshot.provider == "deepseek" { return [] }
         var lanes = quotaLanes(snapshot)
         var seen = Set(lanes.map { normalize($0.title) })
         for root in roots {
@@ -411,11 +629,12 @@ enum DashboardParser {
         id: String,
         title: String,
         tokens: Double?,
-        cost: Double?)
+        cost: Double?,
+        currencyCode: String = "USD")
     {
         guard let tokens = tokens, tokens > 0 else { return }
         if let cost = cost, cost > 0 {
-            appendMetric(&metrics, id: id, title: title, value: currency(cost))
+            appendMetric(&metrics, id: id, title: title, value: currency(cost, code: currencyCode))
         } else {
             metrics.append(DashboardMetric(
                 id: id,
@@ -425,18 +644,41 @@ enum DashboardParser {
         }
     }
 
+    private static func appendCurrencyMetric(
+        _ metrics: inout [DashboardMetric],
+        id: String,
+        title: String,
+        value: Double?,
+        currencyCode: String,
+        unavailableSubtitle: String)
+    {
+        if let value {
+            metrics.append(DashboardMetric(
+                id: id,
+                title: title,
+                value: currency(value, code: currencyCode) ?? decimal(value)))
+        } else {
+            metrics.append(DashboardMetric(
+                id: id,
+                title: title,
+                value: "—",
+                subtitle: unavailableSubtitle))
+        }
+    }
+
     private static func appendMetric(_ metrics: inout [DashboardMetric], id: String, title: String, value: String?) {
         guard let value = value, !value.isEmpty else { return }
         metrics.append(DashboardMetric(id: id, title: title, value: value))
     }
 
-    private static func currency(_ value: Double?) -> String? {
+    private static func currency(_ value: Double?, code: String = "USD") -> String? {
         guard let value = value else { return nil }
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
+        formatter.currencyCode = code.uppercased()
         formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value)) ?? String(format: "$%.2f", value)
+        return formatter.string(from: NSNumber(value: value))
+            ?? "\(code.uppercased()) \(String(format: "%.2f", value))"
     }
 
     private static func compact(_ value: Double?) -> String? {

@@ -43,7 +43,11 @@ actor CLIClient {
     func fetchEnabled(status: Bool = true) async throws -> [ProviderSnapshot] {
         var arguments = ["--format", "json", "--json-only"]
         if status { arguments.append("--status") }
-        let result = try await run(arguments: arguments, timeout: 120, acceptNonZero: true)
+        let result = try await run(
+            arguments: arguments,
+            timeout: 120,
+            acceptNonZero: true,
+            includeLiveUsage: true)
         guard !result.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ClientError.commandFailed(result.status, result.stderr)
         }
@@ -182,7 +186,8 @@ actor CLIClient {
         arguments: [String],
         stdin: String? = nil,
         timeout: TimeInterval,
-        acceptNonZero: Bool = false
+        acceptNonZero: Bool = false,
+        includeLiveUsage: Bool = false
     ) async throws -> CommandResult {
         guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
             throw ClientError.helperMissing
@@ -192,7 +197,11 @@ actor CLIClient {
             let process = Process()
             process.executableURL = executableURL
             process.arguments = arguments
-            process.environment = Self.loginEnvironment()
+            var environment = Self.loginEnvironment()
+            if includeLiveUsage {
+                environment["CODEXBAR_MONTEREY_INCLUDE_LIVE_USAGE"] = "1"
+            }
+            process.environment = environment
 
             // Use temporary files rather than pipes. Querying many enabled providers can
             // produce more output than a pipe buffer, which would deadlock if the parent
