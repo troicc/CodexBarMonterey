@@ -1,9 +1,9 @@
 import Foundation
 
-/// Persists a small, privacy-safe history of quota percentages for providers
-/// whose upstream API only returns the current snapshot. z.ai v0.46 exposes
-/// quota windows but no dated history array, so the Monterey UI samples the
-/// highest used percentage locally and labels it as a local trend.
+/// Persists a small, privacy-safe history of the z.ai five-hour quota window.
+/// The upstream API exposes current quota windows but no dated history array,
+/// so the Monterey UI samples the 300-minute window locally. MCP/monthly quota
+/// windows are intentionally excluded from this trend.
 final class LocalQuotaTrendStore {
     private struct Sample: Codable, Hashable {
         let timestamp: Date
@@ -23,7 +23,7 @@ final class LocalQuotaTrendStore {
             directory = cacheRoot.appendingPathComponent("CodexBarMonterey", isDirectory: true)
         }
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        self.fileURL = directory.appendingPathComponent("quota-trends-v1.json")
+        self.fileURL = directory.appendingPathComponent("zai-five-hour-trend-v2.json")
         self.samplesByProvider = Self.load(from: self.fileURL)
     }
 
@@ -73,12 +73,25 @@ final class LocalQuotaTrendStore {
     }
 
     private static func preferredUsedPercent(_ snapshot: ProviderSnapshot) -> Double? {
-        let values = [
-            snapshot.usage?.primary?.usedPercent,
-            snapshot.usage?.secondary?.usedPercent,
-            snapshot.usage?.tertiary?.usedPercent,
+        let windows = [
+            snapshot.usage?.primary,
+            snapshot.usage?.secondary,
+            snapshot.usage?.tertiary,
         ].compactMap { $0 }
-        return values.max()
+
+        // Select the semantic five-hour window, rather than whichever quota
+        // currently has the largest percentage. z.ai's MCP/monthly quota may
+        // be non-zero while the main five-hour model allowance is still 0%.
+        if let fiveHour = windows.first(where: { window in
+            guard let minutes = window.windowMinutes else { return false }
+            return abs(minutes - 300) <= 1
+        }) {
+            return fiveHour.usedPercent
+        }
+
+        // Older CLI payloads may omit windowMinutes but consistently expose
+        // the main model allowance as `usage.primary`.
+        return snapshot.usage?.primary?.usedPercent
     }
 
     private func save() {

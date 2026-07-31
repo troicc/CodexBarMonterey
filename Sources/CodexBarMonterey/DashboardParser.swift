@@ -111,10 +111,10 @@ enum DashboardParser {
 
         if snapshot.provider == "zai", let current = history.last?.tokens {
             metrics.insert(DashboardMetric(
-                id: "local-quota-trend",
-                title: "Quota trend",
+                id: "local-five-hour-trend",
+                title: "5-hour trend",
                 value: "\(Int(current.rounded()))% used",
-                subtitle: "Local samples on this Mac"), at: 0)
+                subtitle: "Local samples of the 5-hour quota"), at: 0)
         }
 
         let updated = snapshot.usage?.updatedAt ?? snapshot.credits?.updatedAt

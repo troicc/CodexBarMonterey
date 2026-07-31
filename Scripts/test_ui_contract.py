@@ -62,9 +62,12 @@ assert "resolvedTodayTokens" in cost_payload
 assert 'title: "Today tokens"' in parser
 assert "LocalQuotaTrendStore" in store
 assert 'snapshot.provider == "zai"' in quota_trend
+assert 'zai-five-hour-trend-v2.json' in quota_trend
+assert 'abs(minutes - 300) <= 1' in quota_trend
+assert 'return values.max()' not in quota_trend
 assert "quota_trend_store_regression.swift" in (ROOT / "Scripts" / "test_cost_history_parser.sh").read_text()
-assert 'title: "Quota trend"' in parser
-assert "Local quota samples" in views
+assert 'title: "5-hour trend"' in parser
+assert "Local 5-hour samples" in views
 assert 'fixedMaximum: dashboard.id == "zai" ? 100 : nil' in views
 assert '"30dtokens", "thirtydaytokens", "totaltokens"' not in parser
 assert "supplementalJSONBySnapshot" in store

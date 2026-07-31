@@ -328,7 +328,7 @@ struct DashboardSummaryCard: View {
                 }
                 HStack(spacing: 4) {
                     if dashboard.id == "zai", !dashboard.history.isEmpty {
-                        Text("Local quota samples")
+                        Text("Local 5-hour samples")
                     }
                     if let tokens = dashboard.historySummary?.tokens, tokens > 0 {
                         Text("30d: \(compactNumber(tokens)) tokens")
@@ -557,7 +557,7 @@ struct ProviderDetailPanelView: View {
                 }
                 if !dashboard.history.isEmpty {
                     if dashboard.id == "zai" {
-                        Text("Local quota trend (used %)")
+                        Text("Local 5-hour quota trend (used %)")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(.white.opacity(0.58))
                     }
