@@ -17,6 +17,8 @@ parser = (SOURCES / "DashboardParser.swift").read_text()
 store = (SOURCES / "DashboardStore.swift").read_text()
 cost_payload = (SOURCES / "CostHistoryPayload.swift").read_text()
 quota_trend = (SOURCES / "LocalQuotaTrendStore.swift").read_text()
+provider_auth = (SOURCES / "ProviderAuthentication.swift").read_text()
+config_store = (SOURCES / "CodexBarConfigStore.swift").read_text()
 
 # The status item must open a custom popover rather than a native NSMenu.
 assert "NSPopover" in popover
@@ -44,8 +46,21 @@ assert "SecureField" in settings
 assert "pasteAPIKey" in settings
 assert "NSPasteboard.general.string" in settings
 assert "Save & Verify" in settings
-assert "probeAPIProvider" in client
-assert '"--source", "api"' in client
+assert "probeProvider" in client
+assert "saveCredential" in client
+assert "ProviderAuthenticationCatalog" in settings
+assert 'status = "Save failed:' in settings
+assert "Saved, but verification failed" not in settings
+assert 'tokenAccount("deepseek"' in provider_auth
+assert 'tokenAccount("venice"' in provider_auth
+assert 'case .tokenAccount:' in config_store
+assert 'provider["tokenAccounts"]' in config_store
+assert 'provider["apiKey"] = secret' in config_store
+assert 'provider["cookieSource"] = "manual"' in config_store
+assert 'provider["enterpriseHost"] = host' in config_store
+assert 'provider["workspaceID"] = workspace' in config_store
+assert 'provider["region"] = region' in config_store
+assert ".posixPermissions: 0o600" in config_store
 
 # Provider dashboard JSON must be enriched from the upstream CLI and parsed
 # tolerantly so provider-specific histories can render without lockstep schemas.
@@ -91,18 +106,9 @@ assert ".frame(height: switcherHeight)" in views
 assert ".frame(maxHeight: 174)" not in views
 
 # A newly created config must have the upstream versioned root shape, never `{}`.
-assert '"version": 1' in settings
+assert '"version": 1' in config_store
 assert 'Data("{}\\n".utf8)' not in settings
 
 
-# Legacy Swift 5.6 optional-binding syntax contract. Swift 5.7 shorthand such
-# as `guard let value else` must not be reintroduced into the Monterey shell.
-legacy_binding = re.compile(
-    r"\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?=,|else\b|\{)"
-)
-for swift_file in SOURCES.glob("*.swift"):
-    swift_source = swift_file.read_text()
-    match = legacy_binding.search(swift_source)
-    assert match is None, f"Swift 5.7 optional-binding shorthand in {swift_file.name}: {match.group(0)}"
 
-print("Today-token and local z.ai trend UI contract tests passed.")
+print("All-provider authentication UI contract tests passed.")

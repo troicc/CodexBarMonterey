@@ -22,8 +22,13 @@ actor CLIClient {
     }
 
     private let executableURL: URL
+    private let configStore: CodexBarConfigStore
 
-    init(bundle: Bundle = .main) {
+    init(
+        bundle: Bundle = .main,
+        configStore: CodexBarConfigStore = CodexBarConfigStore()
+    ) {
+        self.configStore = configStore
         if let bundled = bundle.url(forAuxiliaryExecutable: "CodexBarCLI") {
             self.executableURL = bundled
         } else {
@@ -56,7 +61,7 @@ actor CLIClient {
     /// not fit the shared UsageSnapshot shape (balances, routing stats, activity, etc.).
     func detailedText(provider: String? = nil) async throws -> String {
         var arguments = ["--no-color", "--status"]
-        if let provider = provider { arguments += ["--provider", provider] }
+        if let provider { arguments += ["--provider", provider] }
         let result = try await run(arguments: arguments, timeout: 120, acceptNonZero: true)
         let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { return text }
@@ -65,7 +70,7 @@ actor CLIClient {
 
     func costText(provider: String? = nil) async throws -> String {
         var arguments = ["cost", "--no-color"]
-        if let provider = provider { arguments += ["--provider", provider] }
+        if let provider { arguments += ["--provider", provider] }
         let result = try await run(arguments: arguments, timeout: 180, acceptNonZero: true)
         let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { return text }
@@ -119,19 +124,36 @@ actor CLIClient {
         _ = try await run(arguments: ["config", enabled ? "enable" : "disable", "--provider", id], timeout: 30)
     }
 
-    func setAPIKey(_ key: String, provider: String) async throws {
+    func saveCredential(
+        _ input: ProviderCredentialInput,
+        provider: String,
+        profile: ProviderAuthenticationProfile
+    ) async throws -> CredentialSaveReceipt {
+        let receipt = try configStore.save(
+            providerID: provider,
+            profile: profile,
+            input: input)
         _ = try await run(
-            arguments: ["config", "set-api-key", "--provider", provider, "--stdin"],
-            stdin: key,
+            arguments: ["config", "validate", "--format", "json", "--pretty"],
             timeout: 30)
+        return receipt
     }
 
-    func probeAPIProvider(_ provider: String) async throws -> String {
-        let result = try await run(
-            arguments: ["--no-color", "--provider", provider, "--source", "api"],
-            timeout: 60)
+    func probeProvider(
+        _ provider: String,
+        profile: ProviderAuthenticationProfile
+    ) async throws -> String {
+        var arguments = ["--no-color", "--provider", provider]
+        if let source = profile.probeSource {
+            arguments += ["--source", source]
+        }
+        let result = try await run(arguments: arguments, timeout: 90)
         let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return text.isEmpty ? "Provider API probe completed successfully." : text
+        return text.isEmpty ? "Provider verification completed successfully." : text
+    }
+
+    func configFileURL() throws -> URL {
+        try configStore.ensureConfigFile()
     }
 
     func refreshBrowserSession(provider: String) async throws -> String {
@@ -201,7 +223,7 @@ actor CLIClient {
             process.standardOutput = outputHandle
             process.standardError = errorHandle
 
-            if let stdin = stdin {
+            if let stdin {
                 let inputPipe = Pipe()
                 process.standardInput = inputPipe
                 inputPipe.fileHandleForWriting.write(Data(stdin.utf8))

@@ -43,6 +43,10 @@ final class SettingsStore: ObservableObject {
     @Published private(set) var providers: [ProviderDescriptor] = []
     @Published var selectedProviderID: String?
     @Published var apiKey = ""
+    @Published var credentialLabel = "Default"
+    @Published var enterpriseHost = ""
+    @Published var workspaceID = ""
+    @Published var region = ""
     @Published var revealAPIKey = false
     @Published private(set) var status = "Select a provider to configure authentication."
     @Published private(set) var isBusy = false
@@ -65,6 +69,38 @@ final class SettingsStore: ObservableObject {
     var selectedProvider: ProviderDescriptor? {
         guard let selectedProviderID = selectedProviderID else { return nil }
         return providers.first(where: { $0.id == selectedProviderID })
+    }
+
+    var selectedAuthenticationProfile: ProviderAuthenticationProfile? {
+        guard let provider = selectedProvider else { return nil }
+        return ProviderAuthenticationCatalog.profile(for: provider.id)
+    }
+
+    var canSaveSelectedConfiguration: Bool {
+        guard let profile = selectedAuthenticationProfile, profile.canSaveConfiguration else {
+            return false
+        }
+        if profile.requiresSecret &&
+            apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return false
+        }
+        if profile.enterpriseHostRequired &&
+            enterpriseHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return false
+        }
+        if profile.workspaceRequired &&
+            workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            return false
+        }
+        if profile.storage == .providerFields {
+            return !enterpriseHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                !region.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return true
     }
 
     func requestSelection(_ providerID: String) {
@@ -97,8 +133,9 @@ final class SettingsStore: ObservableObject {
 
     func select(_ provider: ProviderDescriptor) {
         selectedProviderID = provider.id
-        apiKey = ""
-        status = "Selected \(provider.name) (provider ID: \(provider.id))."
+        clearCredentialFields()
+        let profile = ProviderAuthenticationCatalog.profile(for: provider.id)
+        status = "\(profile.title): \(profile.guidance)"
     }
 
     func setEnabled(_ enabled: Bool, provider: ProviderDescriptor) {
@@ -125,34 +162,68 @@ final class SettingsStore: ObservableObject {
     }
 
     func clearAPIKeyField() {
+        clearCredentialFields()
+        status = "Credential fields cleared."
+    }
+
+    private func clearCredentialFields() {
         apiKey = ""
-        status = "API key field cleared."
+        credentialLabel = "Default"
+        enterpriseHost = ""
+        workspaceID = ""
+        region = ""
     }
 
     func saveAndVerifyAPIKey() {
-        guard let provider = selectedProvider else {
+        guard let provider = selectedProvider,
+              let profile = selectedAuthenticationProfile
+        else {
             status = "Select a provider first."
             return
         }
-        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else {
-            status = "Paste or type an API key first."
+        guard profile.canSaveConfiguration else {
+            status = profile.guidance
             return
         }
+
+        let input = ProviderCredentialInput(
+            secret: apiKey.trimmingCharacters(in: .whitespacesAndNewlines),
+            accountLabel: credentialLabel.trimmingCharacters(in: .whitespacesAndNewlines),
+            enterpriseHost: enterpriseHost.trimmingCharacters(in: .whitespacesAndNewlines),
+            workspaceID: workspaceID.trimmingCharacters(in: .whitespacesAndNewlines),
+            region: region.trimmingCharacters(in: .whitespacesAndNewlines))
+
         Task {
             isBusy = true
-            status = "Saving API key for \(provider.name)…"
             defer { isBusy = false }
+
+            let receipt: CredentialSaveReceipt
             do {
-                try await client.setAPIKey(key, provider: provider.id)
-                status = "API key saved. Verifying \(provider.name)…"
-                let result = try await client.probeAPIProvider(provider.id)
-                apiKey = ""
-                status = result.isEmpty ? "\(provider.name) API key saved and verified." : result
-                NotificationCenter.default.post(name: .providerConfigurationChanged, object: provider.id)
-                await reloadProviders()
+                status = "Saving \(provider.name) configuration…"
+                receipt = try await client.saveCredential(
+                    input,
+                    provider: provider.id,
+                    profile: profile)
             } catch {
-                status = "Saved, but verification failed: \(error.localizedDescription)"
+                status = "Save failed: \(error.localizedDescription)"
+                return
+            }
+
+            NotificationCenter.default.post(
+                name: .providerConfigurationChanged,
+                object: provider.id)
+            status = "\(receipt.summary.capitalized) in \(receipt.configURL.path). Verifying \(provider.name)…"
+
+            do {
+                let result = try await client.probeProvider(provider.id, profile: profile)
+                clearCredentialFields()
+                await reloadProviders()
+                status = result.isEmpty
+                    ? "\(provider.name) configuration saved and verified."
+                    : result
+            } catch {
+                await reloadProviders()
+                status = "\(receipt.summary.capitalized), but verification failed: \(error.localizedDescription)"
             }
         }
     }
@@ -192,33 +263,14 @@ final class SettingsStore: ObservableObject {
     }
 
     func openConfig() {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let xdg = home.appendingPathComponent(".config/codexbar/config.json")
-        let legacy = home.appendingPathComponent(".codexbar/config.json")
-        let target: URL
-        if FileManager.default.fileExists(atPath: xdg.path) {
-            target = xdg
-        } else if FileManager.default.fileExists(atPath: legacy.path) {
-            target = legacy
-        } else {
-            target = xdg
+        Task {
             do {
-                try FileManager.default.createDirectory(at: xdg.deletingLastPathComponent(), withIntermediateDirectories: true)
-                let config = """
-                {
-                  "version": 1,
-                  "hooks": null,
-                  "providers": []
-                }
-                """
-                try Data((config + "\n").utf8).write(to: target, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+                let target = try await client.configFileURL()
+                NSWorkspace.shared.open(target)
             } catch {
-                status = "Could not create config file: \(error.localizedDescription)"
-                return
+                status = "Could not open config file: \(error.localizedDescription)"
             }
         }
-        NSWorkspace.shared.open(target)
     }
 
     func validateConfig() {
@@ -380,43 +432,80 @@ private struct ProviderSettingsView: View {
                         }
                     }
 
-                    GroupBox(label: Text("API authentication").font(.headline)) {
+                    let profile = ProviderAuthenticationCatalog.profile(for: provider.id)
+
+                    GroupBox(label: Text(profile.title).font(.headline)) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Paste the provider token below. The value is sent to the bundled upstream CLI over stdin and is never added to shell history.")
+                            Text(profile.guidance)
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
-                            HStack(spacing: 8) {
-                                Group {
-                                    if store.revealAPIKey {
-                                        TextField("Paste API key or token", text: $store.apiKey)
-                                    } else {
-                                        SecureField("Paste API key or token", text: $store.apiKey)
+
+                            if profile.canSaveConfiguration {
+                                if profile.requiresSecret {
+                                    Text(profile.secretLabel)
+                                        .font(.system(size: 11, weight: .semibold))
+                                    HStack(spacing: 8) {
+                                        Group {
+                                            if store.revealAPIKey {
+                                                TextField(profile.secretPlaceholder, text: $store.apiKey)
+                                            } else {
+                                                SecureField(profile.secretPlaceholder, text: $store.apiKey)
+                                            }
+                                        }
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                        Button(action: store.pasteAPIKey) {
+                                            Label("Paste", systemImage: "doc.on.clipboard")
+                                        }
+                                        Button(action: { store.revealAPIKey.toggle() }) {
+                                            Image(systemName: store.revealAPIKey ? "eye.slash" : "eye")
+                                        }
+                                        .buttonStyle(BorderlessButtonStyle())
                                     }
                                 }
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                Button(action: store.pasteAPIKey) {
-                                    Label("Paste", systemImage: "doc.on.clipboard")
+
+                                if profile.accountLabelVisible {
+                                    TextField("Account label", text: $store.credentialLabel)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
                                 }
-                                Button(action: { store.revealAPIKey.toggle() }) {
-                                    Image(systemName: store.revealAPIKey ? "eye.slash" : "eye")
+
+                                if let label = profile.enterpriseHostLabel {
+                                    TextField(label, text: $store.enterpriseHost)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
                                 }
-                                .buttonStyle(BorderlessButtonStyle())
-                            }
-                            HStack {
-                                Button("Save & Verify", action: store.saveAndVerifyAPIKey)
-                                    .keyboardShortcut(.defaultAction)
-                                    .disabled(store.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || store.isBusy)
-                                Button("Clear field", action: store.clearAPIKeyField)
-                                Spacer()
+
+                                if let label = profile.workspaceLabel {
+                                    TextField(label, text: $store.workspaceID)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                }
+
+                                if let label = profile.regionLabel {
+                                    TextField(
+                                        profile.regionPlaceholder.map { "\(label): \($0)" } ?? label,
+                                        text: $store.region)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                }
+
+                                HStack {
+                                    Button("Save & Verify", action: store.saveAndVerifyAPIKey)
+                                        .keyboardShortcut(.defaultAction)
+                                        .disabled(!store.canSaveSelectedConfiguration || store.isBusy)
+                                    Button("Clear fields", action: store.clearAPIKeyField)
+                                    Spacer()
+                                }
+                            } else {
+                                Text("This provider does not accept a generic config API key. Use the provider login, CLI, OAuth, browser, or local source described above.")
+                                    .font(.system(size: 12, weight: .medium))
                             }
                         }
                         .padding(10)
                     }
 
-                    GroupBox(label: Text("Browser and provider tools").font(.headline)) {
+                    GroupBox(label: Text("Provider tools").font(.headline)) {
                         HStack(spacing: 10) {
-                            Button("Refresh browser session", action: store.refreshBrowserSession)
-                            Button("Clear browser cache", action: store.clearBrowserSession)
+                            if profile.supportsBrowserTools {
+                                Button("Refresh browser session", action: store.refreshBrowserSession)
+                                Button("Clear browser cache", action: store.clearBrowserSession)
+                            }
                             Button("Provider docs", action: store.openProviderDocs)
                             Spacer()
                         }

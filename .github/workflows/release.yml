@@ -59,6 +59,8 @@ jobs:
           python3 Scripts/test_smoke_contract.py
           python3 Scripts/test_ui_contract.py
           Scripts/test_cost_history_parser.sh
+          Scripts/test_provider_auth.sh
+          python3 Scripts/validate_provider_auth_catalog.py
           swiftc -typecheck \
             -target arm64-apple-macosx12.0 \
             -sdk "$(xcrun --sdk macosx --show-sdk-path)" \
