@@ -9,59 +9,102 @@ enum DashboardParser {
             .compactMap { $0 }
             .compactMap(parseJSON)
         let flattened = roots.flatMap(flatten)
+        let costPayload = CostHistoryPayloadParser.payload(
+            provider: snapshot.provider,
+            fromJSON: supplementalJSON)
+        let costBackedProvider = snapshot.provider == "codex" || snapshot.provider == "claude"
 
         var metrics: [DashboardMetric] = []
-        appendMetric(&metrics, id: "today-spend", title: "Today", value: currency(findNumber(flattened, aliases: [
-            "todayspend", "todaycost", "costtoday", "dailyspend", "currentdayspend"
-        ])))
-        appendMetric(&metrics, id: "7d-spend", title: "7d spend", value: currency(findNumber(flattened, aliases: [
-            "7dspend", "sevendayspend", "weekspend", "weeklyspend", "last7daysspend"
-        ])))
-        appendMetric(&metrics, id: "30d-spend", title: "30d spend", value: currency(findNumber(flattened, aliases: [
-            "30dspend", "thirtydayspend", "monthlyspend", "periodspend", "totalspend"
-        ])))
-        appendMetric(&metrics, id: "today-requests", title: "Today req", value: compact(findNumber(flattened, aliases: [
-            "todayrequests", "requeststoday", "dailyrequests"
-        ])))
-        appendMetric(&metrics, id: "30d-tokens", title: "30d tokens", value: compact(findNumber(flattened, aliases: [
-            "30dtokens", "thirtydaytokens", "totaltokens", "periodtokens"
-        ])))
-        appendMetric(&metrics, id: "30d-requests", title: "30d requests", value: compact(findNumber(flattened, aliases: [
-            "30drequests", "thirtydayrequests", "totalrequests", "periodrequests"
-        ])))
+        if let costPayload {
+            appendMetric(
+                &metrics,
+                id: "30d-tokens",
+                title: "30d tokens",
+                value: compact(costPayload.resolvedLast30DaysTokens))
+            if let cost = costPayload.resolvedLast30DaysCostUSD,
+               let tokens = costPayload.resolvedLast30DaysTokens,
+               tokens > 0
+            {
+                if cost > 0 {
+                    appendMetric(&metrics, id: "30d-cost", title: "30d cost", value: currency(cost))
+                } else {
+                    metrics.append(DashboardMetric(
+                        id: "30d-cost",
+                        title: "30d cost",
+                        value: "—",
+                        subtitle: "Pricing unavailable"))
+                }
+            }
+        }
+
+        // Cost-backed providers must use the typed cost payload above. Generic
+        // recursive matching is intentionally disabled for them because
+        // `totalTokens` occurs in every daily row as well as in the aggregate.
+        if !costBackedProvider {
+            appendMetric(&metrics, id: "today-spend", title: "Today", value: currency(findNumber(flattened, aliases: [
+                "todayspend", "todaycost", "costtoday", "dailyspend", "currentdayspend"
+            ])))
+            appendMetric(&metrics, id: "7d-spend", title: "7d spend", value: currency(findNumber(flattened, aliases: [
+                "7dspend", "sevendayspend", "weekspend", "weeklyspend", "last7daysspend"
+            ])))
+            appendMetric(&metrics, id: "30d-spend", title: "30d spend", value: currency(findNumber(flattened, aliases: [
+                "30dspend", "thirtydayspend", "monthlyspend", "periodspend", "totalspend"
+            ])))
+            appendMetric(&metrics, id: "today-requests", title: "Today req", value: compact(findNumber(flattened, aliases: [
+                "todayrequests", "requeststoday", "dailyrequests"
+            ])))
+            appendMetric(&metrics, id: "30d-tokens", title: "30d tokens", value: compact(findNumber(flattened, aliases: [
+                "30dtokens", "thirtydaytokens", "periodtokens"
+            ])))
+            appendMetric(&metrics, id: "30d-requests", title: "30d requests", value: compact(findNumber(flattened, aliases: [
+                "30drequests", "thirtydayrequests", "periodrequests"
+            ])))
+        }
 
         let quotas = mergedQuotaLanes(snapshot: snapshot, roots: roots)
         if metrics.count < 4 {
-            appendMetric(&metrics, id: "balance", title: "Balance", value: currency(findNumber(flattened, aliases: [
-                "balance", "creditbalance", "remainingbalance", "remainingcredits", "creditsremaining"
-            ])))
-            appendMetric(&metrics, id: "tokens", title: "Tokens", value: compact(findNumber(flattened, aliases: [
-                "usedtokens", "tokencount", "tokenusage"
-            ])))
-            appendMetric(&metrics, id: "requests", title: "Requests", value: compact(findNumber(flattened, aliases: [
-                "usedrequests", "requestcount", "requestsused"
-            ])))
+            if snapshot.provider == "codex" {
+                if let remaining = snapshot.credits?.remaining,
+                   remaining > 0 || snapshot.credits?.hasCredits == true
+                {
+                    appendMetric(&metrics, id: "credits", title: "Credits", value: decimal(remaining))
+                }
+            } else {
+                appendMetric(&metrics, id: "balance", title: "Balance", value: currency(findNumber(flattened, aliases: [
+                    "balance", "creditbalance", "remainingbalance", "remainingcredits", "creditsremaining"
+                ])))
+                appendMetric(&metrics, id: "tokens", title: "Tokens", value: compact(findNumber(flattened, aliases: [
+                    "usedtokens", "tokencount", "tokenusage"
+                ])))
+                appendMetric(&metrics, id: "requests", title: "Requests", value: compact(findNumber(flattened, aliases: [
+                    "usedrequests", "requestcount", "requestsused"
+                ])))
+            }
         }
-        if metrics.isEmpty {
-            for lane in quotas.prefix(4) {
-                metrics.append(DashboardMetric(
-                    id: "quota-\(lane.id)",
-                    title: lane.title,
-                    value: String(format: "%.0f%% used", lane.usedPercent),
-                    subtitle: lane.resetText))
-            }
-            if let credits = snapshot.credits?.remaining {
-                metrics.append(DashboardMetric(title: "Credits", value: decimal(credits)))
-            }
-            if metrics.isEmpty, let plan = snapshot.plan {
-                metrics.append(DashboardMetric(title: "Plan", value: plan))
-            }
+        if metrics.isEmpty, let credits = snapshot.credits?.remaining, credits > 0 {
+            metrics.append(DashboardMetric(title: "Credits", value: decimal(credits)))
+        }
+        if metrics.isEmpty, let plan = snapshot.plan, !plan.isEmpty {
+            metrics.append(DashboardMetric(title: "Plan", value: plan))
         }
 
-        let history = extractHistory(from: roots)
-        let topModel = findString(flattened, aliases: [
-            "topmodel", "mostusedmodel", "leadingmodel", "modelname"
-        ])
+        let history: [DashboardHistoryPoint]
+        let historySummary: DashboardHistorySummary?
+        let topModel: String?
+        if let costPayload {
+            history = costHistory(costPayload)
+            historySummary = DashboardHistorySummary(
+                spend: costPayload.resolvedLast30DaysCostUSD,
+                tokens: costPayload.resolvedLast30DaysTokens,
+                requests: nil)
+            topModel = costPayload.topModel
+        } else {
+            history = extractHistory(from: roots)
+            historySummary = genericHistorySummary(history)
+            topModel = findString(flattened, aliases: [
+                "topmodel", "mostusedmodel", "leadingmodel"
+            ])
+        }
 
         let updated = snapshot.usage?.updatedAt ?? snapshot.credits?.updatedAt
         let updatedText = updated.map(relativeDate) ?? "Updated just now"
@@ -75,6 +118,7 @@ enum DashboardParser {
             metrics: Array(metrics.prefix(4)),
             quotas: quotas,
             history: history,
+            historySummary: historySummary,
             topModel: topModel,
             errorMessage: error,
             dashboardURL: ProviderCatalog.dashboardURL(for: snapshot.provider),
@@ -95,7 +139,8 @@ enum DashboardParser {
         var output: [FlatValue] = []
         func visit(_ value: Any, path: String) {
             if let dictionary = value as? [String: Any] {
-                for (key, nested) in dictionary {
+                for key in dictionary.keys.sorted() {
+                    guard let nested = dictionary[key] else { continue }
                     visit(nested, path: path.isEmpty ? key : "\(path).\(key)")
                 }
             } else if let array = value as? [Any] {
@@ -115,25 +160,40 @@ enum DashboardParser {
     }
 
     private static func findNumber(_ values: [FlatValue], aliases: [String]) -> Double? {
-        let normalized = aliases.map(normalize)
-        for alias in normalized {
-            if let match = values.first(where: { $0.path.hasSuffix(alias) || $0.path.contains(alias) }),
-               let number = numberValue(match.value)
-            {
-                return number
+        for alias in aliases.map(normalize) {
+            let matches = values
+                .filter { $0.path.hasSuffix(alias) || $0.path.contains(alias) }
+                .sorted { lhs, rhs in
+                    let leftRank = lhs.path.hasSuffix(alias) ? 0 : 1
+                    let rightRank = rhs.path.hasSuffix(alias) ? 0 : 1
+                    if leftRank == rightRank {
+                        if lhs.path.count == rhs.path.count { return lhs.path < rhs.path }
+                        return lhs.path.count < rhs.path.count
+                    }
+                    return leftRank < rightRank
+                }
+            for match in matches {
+                if let number = numberValue(match.value) { return number }
             }
         }
         return nil
     }
 
     private static func findString(_ values: [FlatValue], aliases: [String]) -> String? {
-        let normalized = aliases.map(normalize)
-        for alias in normalized {
-            if let match = values.first(where: { $0.path.hasSuffix(alias) || $0.path.contains(alias) }),
-               let string = match.value as? String,
-               !string.isEmpty
-            {
-                return string
+        for alias in aliases.map(normalize) {
+            let matches = values
+                .filter { $0.path.hasSuffix(alias) || $0.path.contains(alias) }
+                .sorted { lhs, rhs in
+                    let leftRank = lhs.path.hasSuffix(alias) ? 0 : 1
+                    let rightRank = rhs.path.hasSuffix(alias) ? 0 : 1
+                    if leftRank == rightRank {
+                        if lhs.path.count == rhs.path.count { return lhs.path < rhs.path }
+                        return lhs.path.count < rhs.path.count
+                    }
+                    return leftRank < rightRank
+                }
+            for match in matches {
+                if let string = match.value as? String, !string.isEmpty { return string }
             }
         }
         return nil
@@ -156,6 +216,27 @@ enum DashboardParser {
         return nil
     }
 
+    private static func costHistory(_ payload: CostHistoryPayload) -> [DashboardHistoryPoint] {
+        payload.sortedDaily.suffix(60).map { day in
+            DashboardHistoryPoint(
+                label: formatHistoryLabel(day.date),
+                spend: day.totalCost,
+                tokens: day.totalTokens,
+                requests: nil)
+        }
+    }
+
+    private static func genericHistorySummary(_ history: [DashboardHistoryPoint]) -> DashboardHistorySummary? {
+        guard !history.isEmpty else { return nil }
+        let spendValues = history.compactMap(\.spend)
+        let tokenValues = history.compactMap(\.tokens)
+        let requestValues = history.compactMap(\.requests)
+        return DashboardHistorySummary(
+            spend: spendValues.isEmpty ? nil : spendValues.reduce(0, +),
+            tokens: tokenValues.isEmpty ? nil : tokenValues.reduce(0, +),
+            requests: requestValues.isEmpty ? nil : requestValues.reduce(0, +))
+    }
+
     private static func extractHistory(from roots: [Any]) -> [DashboardHistoryPoint] {
         var candidates: [[DashboardHistoryPoint]] = []
         func visit(_ value: Any) {
@@ -164,7 +245,9 @@ enum DashboardParser {
                 if points.count >= 2 { candidates.append(points) }
                 for item in array { visit(item) }
             } else if let dictionary = value as? [String: Any] {
-                for nested in dictionary.values { visit(nested) }
+                for key in dictionary.keys.sorted() {
+                    if let nested = dictionary[key] { visit(nested) }
+                }
             } else if let array = value as? [Any] {
                 for nested in array { visit(nested) }
             }
@@ -283,7 +366,9 @@ enum DashboardParser {
                         usedPercent: max(0, min(100, used)),
                         resetText: reset))
                 }
-                for nested in dictionary.values { visit(nested) }
+                for key in dictionary.keys.sorted() {
+                    if let nested = dictionary[key] { visit(nested) }
+                }
             } else if let array = value as? [Any] {
                 for nested in array { visit(nested) }
             }

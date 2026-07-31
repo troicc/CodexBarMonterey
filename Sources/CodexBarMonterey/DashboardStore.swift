@@ -19,6 +19,8 @@ final class DashboardStore: ObservableObject {
     var onQuit: (() -> Void)?
 
     private var loadingProviders: Set<String> = []
+    private var supplementalJSONBySnapshot: [String: String] = [:]
+    private var supplementalJSONByProvider: [String: String] = [:]
 
     init(client: CLIClient) {
         self.client = client
@@ -45,11 +47,14 @@ final class DashboardStore: ObservableObject {
             }
             var rebuilt: [String: ProviderDashboard] = [:]
             for snapshot in snapshots {
-                let dashboard = DashboardParser.dashboard(snapshot: snapshot)
+                let cachedSupplement = supplementalJSONBySnapshot[snapshot.id] ?? supplementalJSONByProvider[snapshot.provider]
+                let dashboard = DashboardParser.dashboard(
+                    snapshot: snapshot,
+                    supplementalJSON: cachedSupplement)
                 rebuilt[snapshot.id] = dashboard
                 if rebuilt[snapshot.provider] == nil { rebuilt[snapshot.provider] = dashboard }
             }
-            dashboards.merge(rebuilt) { _, new in new }
+            dashboards = rebuilt
             if let selectedProviderID,
                snapshots.contains(where: { $0.id == selectedProviderID || $0.provider == selectedProviderID }) == false
             {
@@ -90,8 +95,17 @@ final class DashboardStore: ObservableObject {
         guard !loadingProviders.contains(key) else { return }
         loadingProviders.insert(key)
         defer { loadingProviders.remove(key) }
-        let supplement = await client.dashboardSupplementJSON(provider: snapshot.provider)
-        let dashboard = DashboardParser.dashboard(snapshot: snapshot, supplementalJSON: supplement)
+        let fetchedSupplement = await client.dashboardSupplementJSON(provider: snapshot.provider)
+        if let fetchedSupplement {
+            supplementalJSONBySnapshot[key] = fetchedSupplement
+            supplementalJSONByProvider[snapshot.provider] = fetchedSupplement
+        }
+        let resolvedSupplement = fetchedSupplement ??
+            supplementalJSONBySnapshot[key] ??
+            supplementalJSONByProvider[snapshot.provider]
+        let dashboard = DashboardParser.dashboard(
+            snapshot: snapshot,
+            supplementalJSON: resolvedSupplement)
         dashboards[key] = dashboard
         dashboards[snapshot.provider] = dashboard
     }

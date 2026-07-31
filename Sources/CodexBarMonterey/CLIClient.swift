@@ -77,22 +77,22 @@ actor CLIClient {
     /// Some providers expose their history in the usage payload, while local
     /// Codex/Claude scans expose it through `cost`; both are accepted here.
     func dashboardSupplementJSON(provider: String) async -> String? {
-        let commands: [[String]] = [
-            ["cost", "--provider", provider, "--format", "json", "--pretty"],
-            ["--provider", provider, "--format", "json", "--json-only", "--status"],
-        ]
-        var payloads: [Any] = []
-        for arguments in commands {
-            guard let result = try? await run(arguments: arguments, timeout: 180, acceptNonZero: true) else { continue }
-            let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty, let data = text.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) else { continue }
-            payloads.append(json)
-        }
-        guard !payloads.isEmpty,
-              let data = try? JSONSerialization.data(withJSONObject: payloads, options: [.sortedKeys])
+        // The enabled-provider fetch already supplies the complete raw usage JSON.
+        // Only Codex and Claude require the separate local cost-history payload.
+        // Combining another usage payload with cost JSON made generic field
+        // discovery select daily totals as if they were 30-day aggregates.
+        guard provider == "codex" || provider == "claude" else { return nil }
+        guard let result = try? await run(
+            arguments: ["cost", "--provider", provider, "--format", "json", "--pretty"],
+            timeout: 180,
+            acceptNonZero: true)
         else { return nil }
-        return String(decoding: data, as: UTF8.self)
+        let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty,
+              let data = text.data(using: .utf8),
+              (try? JSONSerialization.jsonObject(with: data)) != nil
+        else { return nil }
+        return text
     }
 
     func listProviders() async throws -> [ProviderDescriptor] {

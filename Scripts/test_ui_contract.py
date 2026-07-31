@@ -13,6 +13,8 @@ settings = (SOURCES / "SettingsWindowController.swift").read_text()
 details = (SOURCES / "DetailsWindowController.swift").read_text()
 client = (SOURCES / "CLIClient.swift").read_text()
 parser = (SOURCES / "DashboardParser.swift").read_text()
+store = (SOURCES / "DashboardStore.swift").read_text()
+cost_payload = (SOURCES / "CostHistoryPayload.swift").read_text()
 
 # The status item must open a custom popover rather than a native NSMenu.
 assert "NSPopover" in popover
@@ -50,6 +52,16 @@ assert "extractHistory" in parser
 assert "today-spend" in parser
 assert "30d-tokens" in parser
 
+# Codex cost history must use the documented aggregate fields, not a fuzzy
+# recursive match that can select `daily[].totalTokens` at random.
+assert "last30DaysTokens" in cost_payload
+assert "last30DaysCostUSD" in cost_payload
+assert '"30dtokens", "thirtydaytokens", "totaltokens"' not in parser
+assert "supplementalJSONBySnapshot" in store
+assert "fetchedSupplement ??" in store
+assert '["cost", "--provider", provider' in client
+assert '["--provider", provider, "--format", "json"' not in client
+
 # Swift 6.3 requires StrokeStyle labels in declaration order. Catch the exact
 # ordering bug before the macOS build step.
 assert "StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)" in views
@@ -69,4 +81,4 @@ assert ".frame(maxHeight: 174)" not in views
 assert '"version": 1' in settings
 assert 'Data("{}\\n".utf8)' not in settings
 
-print("Compact dark-blue Monterey UI contract tests passed.")
+print("Compact dark-blue Monterey UI and metric contract tests passed.")

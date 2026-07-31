@@ -39,6 +39,12 @@ struct DashboardQuotaLane: Identifiable, Hashable {
     let resetText: String?
 }
 
+struct DashboardHistorySummary: Hashable {
+    let spend: Double?
+    let tokens: Double?
+    let requests: Double?
+}
+
 struct ProviderDashboard: Identifiable, Hashable {
     let id: String
     let title: String
@@ -47,6 +53,7 @@ struct ProviderDashboard: Identifiable, Hashable {
     let metrics: [DashboardMetric]
     let quotas: [DashboardQuotaLane]
     let history: [DashboardHistoryPoint]
+    let historySummary: DashboardHistorySummary?
     let topModel: String?
     let errorMessage: String?
     let dashboardURL: URL?
@@ -61,6 +68,7 @@ struct ProviderDashboard: Identifiable, Hashable {
             metrics: [],
             quotas: [],
             history: [],
+            historySummary: nil,
             topModel: nil,
             errorMessage: nil,
             dashboardURL: ProviderCatalog.dashboardURL(for: providerID),

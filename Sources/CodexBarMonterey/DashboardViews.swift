@@ -124,8 +124,10 @@ struct DashboardPopoverView: View {
                             store.onOpenSettings?()
                         }
                     }
-                    DashboardSummaryCard(dashboard: dashboard) {
-                        store.onOpenProviderDetails?(snapshot.provider)
+                    if !dashboard.metrics.isEmpty || !dashboard.history.isEmpty {
+                        DashboardSummaryCard(dashboard: dashboard) {
+                            store.onOpenProviderDetails?(snapshot.provider)
+                        }
                     }
                     quotaSection(dashboard)
                 }
@@ -320,19 +322,14 @@ struct DashboardSummaryCard: View {
                 if !dashboard.history.isEmpty {
                     MiniHistoryChart(points: dashboard.history, color: ProviderBrand.color(for: dashboard.id))
                         .frame(height: 78)
-                } else if !dashboard.quotas.isEmpty {
-                    QuotaBarChart(quotas: dashboard.quotas, color: ProviderBrand.color(for: dashboard.id))
-                        .frame(height: 58)
                 }
                 HStack(spacing: 4) {
-                    let tokenTotal = dashboard.history.compactMap(\.tokens).reduce(0, +)
-                    let requestTotal = dashboard.history.compactMap(\.requests).reduce(0, +)
-                    if tokenTotal > 0 {
-                        Text("\(compactNumber(tokenTotal)) tokens")
+                    if let tokens = dashboard.historySummary?.tokens, tokens > 0 {
+                        Text("30d: \(compactNumber(tokens)) tokens")
                     }
-                    if tokenTotal > 0, requestTotal > 0 { Text("·") }
-                    if requestTotal > 0 {
-                        Text("\(compactNumber(requestTotal)) requests")
+                    if let requests = dashboard.historySummary?.requests, requests > 0 {
+                        if dashboard.historySummary?.tokens != nil { Text("·") }
+                        Text("\(compactNumber(requests)) requests")
                     }
                     Spacer()
                     Image(systemName: "chevron.right")
@@ -655,12 +652,15 @@ struct AllProvidersDashboardView: View {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(filteredSnapshots) { snapshot in
+                        let dashboard = store.dashboard(for: snapshot)
                         VStack(alignment: .leading, spacing: 10) {
-                            ProviderHeaderView(snapshot: snapshot, dashboard: store.dashboard(for: snapshot))
-                            DashboardSummaryCard(dashboard: store.dashboard(for: snapshot)) {
-                                store.onOpenProviderDetails?(snapshot.provider)
+                            ProviderHeaderView(snapshot: snapshot, dashboard: dashboard)
+                            if !dashboard.metrics.isEmpty || !dashboard.history.isEmpty {
+                                DashboardSummaryCard(dashboard: dashboard) {
+                                    store.onOpenProviderDetails?(snapshot.provider)
+                                }
                             }
-                            ForEach(store.dashboard(for: snapshot).quotas) { lane in
+                            ForEach(dashboard.quotas) { lane in
                                 QuotaLaneView(lane: lane, color: ProviderBrand.color(for: snapshot.provider))
                             }
                         }
