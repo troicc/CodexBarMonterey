@@ -50,8 +50,8 @@ enum DashboardParser {
             metrics.append(DashboardMetric(
                 id: "deepseek-details",
                 title: "Tokens & cost",
-                value: snapshot.source == "api" ? "Session required" : "Unavailable",
-                subtitle: "Connect a signed-in DeepSeek Platform session"))
+                value: "Platform only",
+                subtitle: "Open DeepSeek Usage to view or export monthly details"))
         }
 
         if let zai {
