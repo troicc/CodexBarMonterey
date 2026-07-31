@@ -103,7 +103,7 @@ struct RateWindow: Decodable, Hashable {
     let resetsAt: Date?
 
     var remainingPercent: Double? {
-        guard let usedPercent else { return nil }
+        guard let usedPercent = usedPercent else { return nil }
         return max(0, min(100, 100 - usedPercent))
     }
 }

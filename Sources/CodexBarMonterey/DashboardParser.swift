@@ -15,26 +15,29 @@ enum DashboardParser {
         let costBackedProvider = snapshot.provider == "codex" || snapshot.provider == "claude"
 
         var metrics: [DashboardMetric] = []
-        if let costPayload {
+        if let costPayload = costPayload {
+            appendMetric(
+                &metrics,
+                id: "today-tokens",
+                title: "Today tokens",
+                value: compact(costPayload.resolvedTodayTokens))
+            appendCostMetric(
+                &metrics,
+                id: "today-cost",
+                title: "Today cost",
+                tokens: costPayload.resolvedTodayTokens,
+                cost: costPayload.resolvedTodayCostUSD)
             appendMetric(
                 &metrics,
                 id: "30d-tokens",
                 title: "30d tokens",
                 value: compact(costPayload.resolvedLast30DaysTokens))
-            if let cost = costPayload.resolvedLast30DaysCostUSD,
-               let tokens = costPayload.resolvedLast30DaysTokens,
-               tokens > 0
-            {
-                if cost > 0 {
-                    appendMetric(&metrics, id: "30d-cost", title: "30d cost", value: currency(cost))
-                } else {
-                    metrics.append(DashboardMetric(
-                        id: "30d-cost",
-                        title: "30d cost",
-                        value: "—",
-                        subtitle: "Pricing unavailable"))
-                }
-            }
+            appendCostMetric(
+                &metrics,
+                id: "30d-cost",
+                title: "30d cost",
+                tokens: costPayload.resolvedLast30DaysTokens,
+                cost: costPayload.resolvedLast30DaysCostUSD)
         }
 
         // Cost-backed providers must use the typed cost payload above. Generic
@@ -91,7 +94,7 @@ enum DashboardParser {
         let history: [DashboardHistoryPoint]
         let historySummary: DashboardHistorySummary?
         let topModel: String?
-        if let costPayload {
+        if let costPayload = costPayload {
             history = costHistory(costPayload)
             historySummary = DashboardHistorySummary(
                 spend: costPayload.resolvedLast30DaysCostUSD,
@@ -100,10 +103,18 @@ enum DashboardParser {
             topModel = costPayload.topModel
         } else {
             history = extractHistory(from: roots)
-            historySummary = genericHistorySummary(history)
+            historySummary = snapshot.provider == "zai" ? nil : genericHistorySummary(history)
             topModel = findString(flattened, aliases: [
                 "topmodel", "mostusedmodel", "leadingmodel"
             ])
+        }
+
+        if snapshot.provider == "zai", let current = history.last?.tokens {
+            metrics.insert(DashboardMetric(
+                id: "local-quota-trend",
+                title: "Quota trend",
+                value: "\(Int(current.rounded()))% used",
+                subtitle: "Local samples on this Mac"), at: 0)
         }
 
         let updated = snapshot.usage?.updatedAt ?? snapshot.credits?.updatedAt
@@ -131,7 +142,7 @@ enum DashboardParser {
     }
 
     private static func parseJSON(_ source: String) -> Any? {
-        guard let data = source.data(using: .utf8) else { return nil }
+        guard let data = source.data(using: String.Encoding.utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: data)
     }
 
@@ -240,9 +251,9 @@ enum DashboardParser {
     private static func extractHistory(from roots: [Any]) -> [DashboardHistoryPoint] {
         var candidates: [[DashboardHistoryPoint]] = []
         func visit(_ value: Any) {
-            if let array = value as? [[String: Any]], array.count >= 2 {
+            if let array = value as? [[String: Any]], !array.isEmpty {
                 let points = array.compactMap(historyPoint)
-                if points.count >= 2 { candidates.append(points) }
+                if !points.isEmpty { candidates.append(points) }
                 for item in array { visit(item) }
             } else if let dictionary = value as? [String: Any] {
                 for key in dictionary.keys.sorted() {
@@ -266,7 +277,7 @@ enum DashboardParser {
         var normalized: [String: Any] = [:]
         for (key, value) in row { normalized[normalize(key)] = value }
         let dateValue = firstValue(normalized, keys: ["date", "day", "label", "startdate", "timestamp", "hour", "period"])
-        guard let dateValue else { return nil }
+        guard let dateValue = dateValue else { return nil }
         let label = formatHistoryLabel(dateValue)
         let spend = firstNumber(normalized, keys: ["spend", "cost", "amount", "totalcost", "usd"])
         let tokens = firstNumber(normalized, keys: ["tokens", "totaltokens", "tokenusage"])
@@ -351,9 +362,9 @@ enum DashboardParser {
                     let titleValue = firstValue(normalized, keys: ["title", "label", "name", "windowlabel", "metric"])
                     let minutes = firstNumber(normalized, keys: ["windowminutes", "minutes", "durationminutes"])
                     let title: String
-                    if let titleValue {
+                    if let titleValue = titleValue {
                         title = String(describing: titleValue)
-                    } else if let minutes {
+                    } else if let minutes = minutes {
                         title = windowLabel(minutes: minutes)
                     } else {
                         title = "Quota"
@@ -395,13 +406,32 @@ enum DashboardParser {
         return message
     }
 
+    private static func appendCostMetric(
+        _ metrics: inout [DashboardMetric],
+        id: String,
+        title: String,
+        tokens: Double?,
+        cost: Double?)
+    {
+        guard let tokens = tokens, tokens > 0 else { return }
+        if let cost = cost, cost > 0 {
+            appendMetric(&metrics, id: id, title: title, value: currency(cost))
+        } else {
+            metrics.append(DashboardMetric(
+                id: id,
+                title: title,
+                value: "—",
+                subtitle: "Pricing unavailable"))
+        }
+    }
+
     private static func appendMetric(_ metrics: inout [DashboardMetric], id: String, title: String, value: String?) {
-        guard let value, !value.isEmpty else { return }
+        guard let value = value, !value.isEmpty else { return }
         metrics.append(DashboardMetric(id: id, title: title, value: value))
     }
 
     private static func currency(_ value: Double?) -> String? {
-        guard let value else { return nil }
+        guard let value = value else { return nil }
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
         formatter.currencyCode = "USD"
@@ -410,7 +440,7 @@ enum DashboardParser {
     }
 
     private static func compact(_ value: Double?) -> String? {
-        guard let value else { return nil }
+        guard let value = value else { return nil }
         let absolute = abs(value)
         if absolute >= 1_000_000_000 { return String(format: "%.1fB", value / 1_000_000_000) }
         if absolute >= 1_000_000 { return String(format: "%.1fM", value / 1_000_000) }

@@ -56,7 +56,7 @@ actor CLIClient {
     /// not fit the shared UsageSnapshot shape (balances, routing stats, activity, etc.).
     func detailedText(provider: String? = nil) async throws -> String {
         var arguments = ["--no-color", "--status"]
-        if let provider { arguments += ["--provider", provider] }
+        if let provider = provider { arguments += ["--provider", provider] }
         let result = try await run(arguments: arguments, timeout: 120, acceptNonZero: true)
         let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { return text }
@@ -65,7 +65,7 @@ actor CLIClient {
 
     func costText(provider: String? = nil) async throws -> String {
         var arguments = ["cost", "--no-color"]
-        if let provider { arguments += ["--provider", provider] }
+        if let provider = provider { arguments += ["--provider", provider] }
         let result = try await run(arguments: arguments, timeout: 180, acceptNonZero: true)
         let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { return text }
@@ -201,7 +201,7 @@ actor CLIClient {
             process.standardOutput = outputHandle
             process.standardError = errorHandle
 
-            if let stdin {
+            if let stdin = stdin {
                 let inputPipe = Pipe()
                 process.standardInput = inputPipe
                 inputPipe.fileHandleForWriting.write(Data(stdin.utf8))

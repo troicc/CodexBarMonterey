@@ -14,7 +14,7 @@ extension RateWindow {
     }
 
     var resetText: String? {
-        guard let resetsAt else { return nil }
+        guard let resetsAt = resetsAt else { return nil }
         let interval = resetsAt.timeIntervalSinceNow
         if interval <= 0 { return "Reset pending" }
         let formatter = DateComponentsFormatter()

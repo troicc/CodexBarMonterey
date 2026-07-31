@@ -22,7 +22,7 @@ final class SettingsWindowController: NSWindowController {
     required init?(coder: NSCoder) { nil }
 
     func show(selectedProviderID: String? = nil) {
-        if let selectedProviderID { store.requestSelection(selectedProviderID) }
+        if let selectedProviderID = selectedProviderID { store.requestSelection(selectedProviderID) }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -63,7 +63,7 @@ final class SettingsStore: ObservableObject {
     }
 
     var selectedProvider: ProviderDescriptor? {
-        guard let selectedProviderID else { return nil }
+        guard let selectedProviderID = selectedProviderID else { return nil }
         return providers.first(where: { $0.id == selectedProviderID })
     }
 
@@ -79,13 +79,13 @@ final class SettingsStore: ObservableObject {
         do {
             providers = try await client.listProviders()
             let target = requestedProviderID ?? selectedProviderID
-            if let target, providers.contains(where: { $0.id == target }) {
+            if let target = target, providers.contains(where: { $0.id == target }) {
                 selectedProviderID = target
             } else if selectedProviderID == nil {
                 selectedProviderID = providers.first?.id
             }
             requestedProviderID = nil
-            if let selectedProvider {
+            if let selectedProvider = selectedProvider {
                 status = "Selected \(selectedProvider.name) (provider ID: \(selectedProvider.id))."
             } else {
                 status = "\(providers.count) providers detected."

@@ -21,7 +21,7 @@ final class DetailsWindowController: NSWindowController {
     required init?(coder: NSCoder) { nil }
 
     func showUsage(provider: String?, displayName: String?) {
-        guard let window else { return }
+        guard let window = window else { return }
         window.title = displayName.map { "\($0) — Full Usage Details" } ?? "All Enabled Providers — Full Usage Details"
         window.contentViewController = NSHostingController(
             rootView: AllProvidersDashboardView(store: store, selectedProvider: provider))

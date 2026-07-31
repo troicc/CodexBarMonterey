@@ -21,13 +21,14 @@ final class DashboardStore: ObservableObject {
     private var loadingProviders: Set<String> = []
     private var supplementalJSONBySnapshot: [String: String] = [:]
     private var supplementalJSONByProvider: [String: String] = [:]
+    private let quotaTrendStore = LocalQuotaTrendStore()
 
     init(client: CLIClient) {
         self.client = client
     }
 
     var selectedSnapshot: ProviderSnapshot? {
-        guard let selectedProviderID else { return snapshots.first }
+        guard let selectedProviderID = selectedProviderID else { return snapshots.first }
         return snapshots.first(where: { $0.id == selectedProviderID || $0.provider == selectedProviderID })
     }
 
@@ -48,14 +49,16 @@ final class DashboardStore: ObservableObject {
             var rebuilt: [String: ProviderDashboard] = [:]
             for snapshot in snapshots {
                 let cachedSupplement = supplementalJSONBySnapshot[snapshot.id] ?? supplementalJSONByProvider[snapshot.provider]
+                let localTrend = quotaTrendStore.record(snapshot: snapshot)
+                let combinedSupplement = Self.combinedSupplementalJSON(cachedSupplement, localTrend)
                 let dashboard = DashboardParser.dashboard(
                     snapshot: snapshot,
-                    supplementalJSON: cachedSupplement)
+                    supplementalJSON: combinedSupplement)
                 rebuilt[snapshot.id] = dashboard
                 if rebuilt[snapshot.provider] == nil { rebuilt[snapshot.provider] = dashboard }
             }
             dashboards = rebuilt
-            if let selectedProviderID,
+            if let selectedProviderID = selectedProviderID,
                snapshots.contains(where: { $0.id == selectedProviderID || $0.provider == selectedProviderID }) == false
             {
                 self.selectedProviderID = snapshots.first?.id
@@ -96,13 +99,15 @@ final class DashboardStore: ObservableObject {
         loadingProviders.insert(key)
         defer { loadingProviders.remove(key) }
         let fetchedSupplement = await client.dashboardSupplementJSON(provider: snapshot.provider)
-        if let fetchedSupplement {
+        if let fetchedSupplement = fetchedSupplement {
             supplementalJSONBySnapshot[key] = fetchedSupplement
             supplementalJSONByProvider[snapshot.provider] = fetchedSupplement
         }
-        let resolvedSupplement = fetchedSupplement ??
+        let cachedSupplement = fetchedSupplement ??
             supplementalJSONBySnapshot[key] ??
             supplementalJSONByProvider[snapshot.provider]
+        let localTrend = quotaTrendStore.record(snapshot: snapshot)
+        let resolvedSupplement = Self.combinedSupplementalJSON(cachedSupplement, localTrend)
         let dashboard = DashboardParser.dashboard(
             snapshot: snapshot,
             supplementalJSON: resolvedSupplement)
@@ -128,5 +133,19 @@ final class DashboardStore: ObservableObject {
         guard let json = selectedSnapshot?.rawJSON else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(json, forType: .string)
+    }
+
+    private static func combinedSupplementalJSON(_ first: String?, _ second: String?) -> String? {
+        let sources = [first, second].compactMap { $0 }.filter { !$0.isEmpty }
+        guard !sources.isEmpty else { return nil }
+        if sources.count == 1 { return sources[0] }
+        let objects = sources.compactMap { source -> Any? in
+            guard let data = source.data(using: String.Encoding.utf8) else { return nil }
+            return try? JSONSerialization.jsonObject(with: data)
+        }
+        guard !objects.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: objects, options: [.sortedKeys])
+        else { return sources[0] }
+        return String(decoding: data, as: UTF8.self)
     }
 }

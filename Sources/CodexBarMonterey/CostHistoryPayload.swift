@@ -29,6 +29,17 @@ struct CostHistoryPayload: Decodable, Hashable {
             summedDaily(\.totalCost)
     }
 
+    /// Tokens recorded for the current local calendar day. The cost scanner's
+    /// `daily[].date` contract is `yyyy-MM-dd`; if no row exists but a daily
+    /// collection was returned, the correct current-day value is zero.
+    var resolvedTodayTokens: Double? {
+        resolvedToday(\.totalTokens)
+    }
+
+    var resolvedTodayCostUSD: Double? {
+        resolvedToday(\.totalCost)
+    }
+
     var sortedDaily: [CostHistoryDay] {
         (daily ?? []).sorted {
             if $0.date == $1.date { return ($0.totalTokens ?? 0) < ($1.totalTokens ?? 0) }
@@ -70,6 +81,20 @@ struct CostHistoryPayload: Decodable, Hashable {
         let values = (daily ?? []).compactMap { $0[keyPath: keyPath] }
         guard !values.isEmpty else { return nil }
         return values.reduce(0, +)
+    }
+
+    private func resolvedToday(_ keyPath: KeyPath<CostHistoryDay, Double?>) -> Double? {
+        guard daily != nil else { return nil }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let todayKey = formatter.string(from: Date())
+        guard let row = sortedDaily.last(where: { String($0.date.prefix(10)) == todayKey }) else {
+            return 0
+        }
+        return positiveOrZero(row[keyPath: keyPath]) ?? 0
     }
 
     private func positiveOrZero(_ value: Double?) -> Double? {

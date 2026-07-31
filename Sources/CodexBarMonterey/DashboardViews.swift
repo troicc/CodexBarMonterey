@@ -320,10 +320,16 @@ struct DashboardSummaryCard: View {
                     }
                 }
                 if !dashboard.history.isEmpty {
-                    MiniHistoryChart(points: dashboard.history, color: ProviderBrand.color(for: dashboard.id))
+                    MiniHistoryChart(
+                        points: dashboard.history,
+                        color: ProviderBrand.color(for: dashboard.id),
+                        fixedMaximum: dashboard.id == "zai" ? 100 : nil)
                         .frame(height: 78)
                 }
                 HStack(spacing: 4) {
+                    if dashboard.id == "zai", !dashboard.history.isEmpty {
+                        Text("Local quota samples")
+                    }
                     if let tokens = dashboard.historySummary?.tokens, tokens > 0 {
                         Text("30d: \(compactNumber(tokens)) tokens")
                     }
@@ -432,7 +438,7 @@ private struct DashboardActionRow: View {
                     .frame(width: 16)
                 Text(title)
                 Spacer()
-                if let shortcut {
+                if let shortcut = shortcut {
                     Text(shortcut)
                         .foregroundColor(.white.opacity(0.42))
                 }
@@ -458,6 +464,7 @@ private struct DashboardRowButtonStyle: ButtonStyle {
 struct MiniHistoryChart: View {
     let points: [DashboardHistoryPoint]
     let color: Color
+    let fixedMaximum: Double?
 
     private var values: [Double] {
         let spend = points.compactMap(\.spend)
@@ -469,7 +476,7 @@ struct MiniHistoryChart: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let maxValue = max(values.max() ?? 1, 1)
+            let maxValue = max(fixedMaximum ?? values.max() ?? 1, 1)
             HStack(alignment: .bottom, spacing: max(2, geometry.size.width / CGFloat(max(values.count, 1)) * 0.22)) {
                 ForEach(Array(values.enumerated()), id: \.offset) { _, value in
                     RoundedRectangle(cornerRadius: 2)
@@ -549,6 +556,11 @@ struct ProviderDetailPanelView: View {
                     }
                 }
                 if !dashboard.history.isEmpty {
+                    if dashboard.id == "zai" {
+                        Text("Local quota trend (used %)")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.58))
+                    }
                     DetailedHistoryChart(points: dashboard.history, providerID: dashboard.id)
                         .frame(height: 210)
                 } else {
@@ -578,9 +590,15 @@ private struct DetailedHistoryChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            MiniHistoryChart(points: points, color: ProviderBrand.color(for: providerID))
+            MiniHistoryChart(
+                points: points,
+                color: ProviderBrand.color(for: providerID),
+                fixedMaximum: providerID == "zai" ? 100 : nil)
                 .frame(height: 102)
-            LineHistoryChart(values: points.map { $0.tokens ?? $0.requests ?? 0 }, color: ProviderBrand.color(for: providerID))
+            LineHistoryChart(
+                values: points.map { $0.tokens ?? $0.requests ?? 0 },
+                color: ProviderBrand.color(for: providerID),
+                fixedMaximum: providerID == "zai" ? 100 : nil)
                 .frame(height: 72)
             HStack {
                 Text(points.first?.label ?? "")
@@ -596,13 +614,14 @@ private struct DetailedHistoryChart: View {
 private struct LineHistoryChart: View {
     let values: [Double]
     let color: Color
+    let fixedMaximum: Double?
 
     var body: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottomLeading) {
                 Path { path in
                     guard !values.isEmpty else { return }
-                    let maximum = max(values.max() ?? 1, 1)
+                    let maximum = max(fixedMaximum ?? values.max() ?? 1, 1)
                     for (index, value) in values.enumerated() {
                         let x = values.count == 1 ? 0 : geometry.size.width * CGFloat(index) / CGFloat(values.count - 1)
                         let y = geometry.size.height * (1 - CGFloat(value / maximum))
@@ -618,7 +637,7 @@ private struct LineHistoryChart: View {
                     .mask(
                         Path { path in
                             guard !values.isEmpty else { return }
-                            let maximum = max(values.max() ?? 1, 1)
+                            let maximum = max(fixedMaximum ?? values.max() ?? 1, 1)
                             path.move(to: CGPoint(x: 0, y: geometry.size.height))
                             for (index, value) in values.enumerated() {
                                 let x = values.count == 1 ? 0 : geometry.size.width * CGFloat(index) / CGFloat(values.count - 1)
@@ -683,7 +702,7 @@ struct AllProvidersDashboardView: View {
     }
 
     private var filteredSnapshots: [ProviderSnapshot] {
-        guard let selectedProvider else { return store.snapshots }
+        guard let selectedProvider = selectedProvider else { return store.snapshots }
         return store.snapshots.filter { $0.provider == selectedProvider || $0.id == selectedProvider }
     }
 }

@@ -32,7 +32,7 @@ final class MenuController: NSObject {
             self?.details.showUsage(provider: nil, displayName: nil)
         }
         store.onOpenProviderDetails = { [weak self] providerID in
-            guard let self,
+            guard let self = self,
                   let snapshot = self.store.snapshots.first(where: { $0.provider == providerID || $0.id == providerID })
             else { return }
             self.detailPanel.show(dashboard: self.store.dashboard(for: snapshot))
@@ -98,7 +98,7 @@ final class MenuController: NSObject {
                 mergedItem = item
             }
         } else {
-            if let mergedItem {
+            if let mergedItem = mergedItem {
                 NSStatusBar.system.removeStatusItem(mergedItem)
                 self.mergedItem = nil
             }
@@ -126,11 +126,11 @@ final class MenuController: NSObject {
         button.target = self
         button.action = #selector(statusButtonClicked(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        if let providerID { buttonProviders[ObjectIdentifier(button)] = providerID }
+        if let providerID = providerID { buttonProviders[ObjectIdentifier(button)] = providerID }
     }
 
     private func renderStatusItems() {
-        if let mergedItem {
+        if let mergedItem = mergedItem {
             configureButton(mergedItem.button, snapshots: store.snapshots)
         }
         for snapshot in store.snapshots {
@@ -141,9 +141,9 @@ final class MenuController: NSObject {
     }
 
     private func configureButton(_ button: NSStatusBarButton?, snapshots: [ProviderSnapshot]) {
-        guard let button else { return }
+        guard let button = button else { return }
         let highest = snapshots.compactMap(\.maximumUsedPercent).max()
-        if Preferences.shared.showPercentage, let highest {
+        if Preferences.shared.showPercentage, let highest = highest {
             button.title = String(format: "%.0f%%", highest)
             button.image = nil
         } else {

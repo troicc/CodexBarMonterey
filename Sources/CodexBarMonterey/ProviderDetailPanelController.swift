@@ -21,7 +21,7 @@ final class ProviderDetailPanelController: NSWindowController {
     required init?(coder: NSCoder) { nil }
 
     func show(dashboard: ProviderDashboard) {
-        guard let window else { return }
+        guard let window = window else { return }
         window.contentViewController = NSHostingController(rootView: ProviderDetailPanelView(dashboard: dashboard))
         window.title = "\(dashboard.title) Details"
         if let screen = NSScreen.main {

@@ -23,7 +23,7 @@ final class DashboardPopoverController: NSObject, NSPopoverDelegate {
             popover.performClose(nil)
             return
         }
-        if let providerID { store.selectProviderID(providerID) }
+        if let providerID = providerID { store.selectProviderID(providerID) }
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         NSApp.activate(ignoringOtherApps: true)
         Task {

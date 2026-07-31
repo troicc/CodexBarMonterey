@@ -2,6 +2,7 @@
 """Fast source-level regressions for the original-style Monterey UI."""
 
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT / "Sources" / "CodexBarMonterey"
@@ -15,6 +16,7 @@ client = (SOURCES / "CLIClient.swift").read_text()
 parser = (SOURCES / "DashboardParser.swift").read_text()
 store = (SOURCES / "DashboardStore.swift").read_text()
 cost_payload = (SOURCES / "CostHistoryPayload.swift").read_text()
+quota_trend = (SOURCES / "LocalQuotaTrendStore.swift").read_text()
 
 # The status item must open a custom popover rather than a native NSMenu.
 assert "NSPopover" in popover
@@ -56,6 +58,14 @@ assert "30d-tokens" in parser
 # recursive match that can select `daily[].totalTokens` at random.
 assert "last30DaysTokens" in cost_payload
 assert "last30DaysCostUSD" in cost_payload
+assert "resolvedTodayTokens" in cost_payload
+assert 'title: "Today tokens"' in parser
+assert "LocalQuotaTrendStore" in store
+assert 'snapshot.provider == "zai"' in quota_trend
+assert "quota_trend_store_regression.swift" in (ROOT / "Scripts" / "test_cost_history_parser.sh").read_text()
+assert 'title: "Quota trend"' in parser
+assert "Local quota samples" in views
+assert 'fixedMaximum: dashboard.id == "zai" ? 100 : nil' in views
 assert '"30dtokens", "thirtydaytokens", "totaltokens"' not in parser
 assert "supplementalJSONBySnapshot" in store
 assert "fetchedSupplement ??" in store
@@ -81,4 +91,15 @@ assert ".frame(maxHeight: 174)" not in views
 assert '"version": 1' in settings
 assert 'Data("{}\\n".utf8)' not in settings
 
-print("Compact dark-blue Monterey UI and metric contract tests passed.")
+
+# Legacy Swift 5.6 optional-binding syntax contract. Swift 5.7 shorthand such
+# as `guard let value else` must not be reintroduced into the Monterey shell.
+legacy_binding = re.compile(
+    r"\blet\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?=,|else\b|\{)"
+)
+for swift_file in SOURCES.glob("*.swift"):
+    swift_source = swift_file.read_text()
+    match = legacy_binding.search(swift_source)
+    assert match is None, f"Swift 5.7 optional-binding shorthand in {swift_file.name}: {match.group(0)}"
+
+print("Today-token and local z.ai trend UI contract tests passed.")
