@@ -3,9 +3,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+MODULE_CACHE="$TMP/module-cache"
+mkdir -p "$MODULE_CACHE"
 
 cp "$ROOT/Scripts/provider_auth_config_regression.swift" "$TMP/main.swift"
 swiftc \
+  -module-cache-path "$MODULE_CACHE" \
   "$ROOT/Sources/CodexBarMonterey/ProviderAuthentication.swift" \
   "$ROOT/Sources/CodexBarMonterey/CodexBarConfigStore.swift" \
   "$ROOT/Sources/CodexBarMonterey/Models.swift" \

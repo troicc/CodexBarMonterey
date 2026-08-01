@@ -34,7 +34,27 @@ let snapshot = ProviderSnapshot(
         tertiary: RateWindow(usedPercent: 81, windowMinutes: 1440, resetsAt: nil),
         updatedAt: Date(),
         identity: nil,
-        accountEmail: nil,
+        accountEmail: "first@example.com",
+        accountOrganization: nil,
+        loginMethod: nil),
+    credits: nil,
+    account: nil,
+    plan: nil,
+    error: nil,
+    rawJSON: nil)
+
+let secondAccountSnapshot = ProviderSnapshot(
+    provider: "zai",
+    version: nil,
+    source: "api",
+    status: nil,
+    usage: UsageSnapshot(
+        primary: RateWindow(usedPercent: 1, windowMinutes: 43200, resetsAt: nil),
+        secondary: RateWindow(usedPercent: 64, windowMinutes: 300, resetsAt: nil),
+        tertiary: nil,
+        updatedAt: Date(),
+        identity: nil,
+        accountEmail: "second@example.com",
         accountOrganization: nil,
         loginMethod: nil),
     credits: nil,
@@ -46,13 +66,26 @@ let snapshot = ProviderSnapshot(
 let start = Date(timeIntervalSince1970: 1_800_000_000)
 let store = LocalQuotaTrendStore(storageDirectory: directory)
 let first = store.record(snapshot: snapshot, now: start)
+let secondAccountFirst = store.record(snapshot: secondAccountSnapshot, now: start)
 let second = store.record(snapshot: snapshot, now: start.addingTimeInterval(600))
 require(sampledValues(first) == [37], "first sample did not use the five-hour quota")
+require(sampledValues(secondAccountFirst) == [64], "second provider account reused the first account trend")
 require(sampledValues(second) == [37, 37], "spaced five-hour samples were not retained")
+require(snapshot.id != secondAccountSnapshot.id, "account identity did not participate in snapshot ID")
 
 let reloaded = LocalQuotaTrendStore(storageDirectory: directory)
 let third = reloaded.record(snapshot: snapshot, now: start.addingTimeInterval(1200))
 require(sampledValues(third) == [37, 37, 37], "persisted five-hour samples were not reloaded")
+let outOfOrder = reloaded.record(snapshot: snapshot, now: start.addingTimeInterval(900))
+require(sampledValues(outOfOrder) == [37, 37, 37], "out-of-order sample moved the trend backwards")
+let secondAccountReloaded = reloaded.record(snapshot: secondAccountSnapshot, now: start.addingTimeInterval(1200))
+require(sampledValues(secondAccountReloaded) == [64, 64], "reloaded trends leaked across provider accounts")
+
+let historyURL = directory.appendingPathComponent("zai-five-hour-trend-v3.json")
+let historyAttributes = try FileManager.default.attributesOfItem(atPath: historyURL.path)
+if let permissions = historyAttributes[.posixPermissions] as? NSNumber {
+    require(permissions.intValue & 0o777 == 0o600, "quota trend permissions are not 0600")
+}
 
 // Older payloads can omit windowMinutes. In that case only usage.primary is a
 // valid fallback; secondary/MCP percentages must not take over the main trend.

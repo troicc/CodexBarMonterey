@@ -20,7 +20,8 @@ APP_BIN_DIR="$(swift build --package-path "$ROOT" -c release --arch "$ARCH" --sh
 APPBIN="$APP_BIN_DIR/CodexBarMonterey"
 [[ -x "$APPBIN" ]] || { echo "App build output not found: $APPBIN" >&2; exit 1; }
 ENGINE="$ROOT/build/engine/$ARCH/CodexBarCLI"
-[[ -x "$ENGINE" ]] || "$ROOT/Scripts/build_engine.sh" "$ARCH"
+"$ROOT/Scripts/build_engine.sh" "$ARCH"
+[[ -x "$ENGINE" ]] || { echo "Provider engine was not produced: $ENGINE" >&2; exit 1; }
 
 APP="$ROOT/dist/$ARCH/CodexBar Monterey.app"
 rm -rf "$APP"

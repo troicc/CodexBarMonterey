@@ -1,6 +1,6 @@
 # CodexBar Monterey 项目记忆 / Agent Handoff
 
-> 这是一份给后续对话和 agent 的项目上下文。开始分析、修改或发布前先读本文件。内容是 2026-08-01 的快照；涉及分支、提交、上游能力和依赖版本时，先重新检查当前仓库状态。
+> ⚠️ **记忆漂移提醒：本文件只是 2026-08-01 的人工快照，不是事实源。** 分支、HEAD、工作树、上游能力、依赖版本、CI 和发布状态都可能在下一次对话前改变。每次开始分析、修改、发布或接手任务时，必须先读取本文件，再用 `git status --short --branch`、`git log -5 --oneline --decorate`、`git branch -vv` 和当前代码/测试重新验证。发生冲突时，以工作树、代码、测试、CI 和 Git 历史为准，并在同一轮改动中同步修正本文件；不得仅凭模型记忆或本文件里的旧结论继续操作。
 
 ## 1. 当前状态速览
 
@@ -8,18 +8,18 @@
 | --- | --- |
 | GitHub 仓库 | troicc/CodexBarMonterey |
 | origin | https://github.com/troicc/CodexBarMonterey.git |
-| 当前分支 | fix/deepseek-zai-dashboard |
-| 当前 HEAD | 02c9df9 — Fix Moonshot finance provider patch context |
-| 工作树 | 记录时干净 |
+| 分支快照 | 本轮发布分支名为 `codex/native-experience-refactor`；实际分支必须运行 Git 命令确认 |
+| 重构基线 | bed623c — docs: add project memory and release runbook；本轮重构位于其后的提交 |
+| 工作树期望 | 本轮提交后应干净；若存在差异，不得默认属于本轮，必须重新审查 |
 | 上游引擎常量 | ENGINE_VERSION = v0.46.0 |
-| 当前正式 tag | v0.5.0（同时存在 v0.4.0 指向同一旧提交） |
-| 目标发布 | v0.6.0 / 应用版本 0.6.0 |
+| 当前正式 tag | v0.6.0 |
+| 目标发布 | 下一版本待定；不要重复创建 v0.6.0 |
 | 最低系统 | macOS 12 Monterey |
 | 架构 | Universal 2：arm64 + x86_64 |
 | UI 技术 | AppKit 菜单栏壳 + SwiftUI 内容视图 |
 | 发布入口 | .github/workflows/release.yml，由 v* tag push 触发 |
 
-当前 feature 分支包含在 origin/main 之后的 DeepSeek、z.ai、Moonshot 等 dashboard/finance 改动；发布 0.6.0 前应先确认这些提交已经合入 main。不要把“当前分支有代码”误认为“main 已经包含代码”。
+本轮重构从 `main@bed623c` 开始，完整发布分支为 `codex/native-experience-refactor`。是否已经合并进 `main`、是否已通过最新 CI、是否已打 tag 或正式发布，都必须通过 GitHub/Git 现状确认，不能从本快照推断。
 
 ## 2. 项目定位
 
@@ -64,8 +64,10 @@
 - Sources/CodexBarMonterey/LocalQuotaTrendStore.swift：保存 z.ai 五小时 quota 样本并生成本地趋势。
 - Patches/CodexBarLiveUsage.patch：为 z.ai、DeepSeek 增加 live JSON payload；由环境变量控制。
 - Scripts/build_universal.sh：arm64/x86_64 构建、合并 bundle 内 Mach-O、签名和 zip。
+- Scripts/engine_source_fingerprint.py：对 ENGINE_VERSION、fetch/patch 脚本和 patch 文件做确定性指纹，防止本地打包复用旧 provider engine。
 - Scripts/generate_appcast.sh：使用 Sparkle 工具生成带签名的 appcast.xml。
 - .github/workflows/release.yml：完整 release pipeline，发布 zip、checksum、可选 appcast/notarization。
+- Tests/CodexBarMontereyTests/CoreBehaviorTests.swift：SwiftPM 行为测试；CI 以 release 配置运行。
 
 ### 当前数据能力
 
@@ -73,8 +75,10 @@
 - DeepSeek / Moonshot / MiMo：支持 prepaid balance delta 方式的本地花费估算。
 - Kimi、z.ai、Qwen、Qwen Cloud、Alibaba 变体：主要是 quota/balance-only，不能假设有官方历史成本。
 - z.ai：live usage payload 优先；没有 live 数据时，可用 LocalQuotaTrendStore 的本地采样回退。
-- DeepSeek / z.ai / Moonshot 的 provider dashboard 改动已经是当前 0.6.0 候选版本的重要内容。
+- DeepSeek / z.ai / Moonshot 的 provider dashboard 已包含在当前 v0.6.0 基线中。
 - LocalSpendHistoryStore 的数值应标为 estimate；它是余额差估算，不等于 provider 官方账单。
+- 本地历史按 snapshot account ID 隔离；长离线间隔或跨午夜余额下降标记为 unassigned，不计入当天/30 天估算。
+- provider cost 命令没有 account selector；同一 provider 同时出现多个账号时，DashboardStore 会抑制 provider 级 supplemental cost，避免把同一份账单展示到多个账号。
 
 ## 4. 当前 UI 事实
 
@@ -85,9 +89,11 @@
 - Overview tile 会打开独立的全量详情窗口（AllProvidersDashboardView），不是在 popover 内展开。
 - provider summary card 最多展示四个 metrics、mini history chart、history summary、top model；下面是 quota lanes。
 - 底部动作：Usage Dashboard、Status Page、Refresh、Settings、About CodexBar、Quit。
-- 当前 DashboardActionRow 的 ⌘R、⌘,、⌘Q 主要是可见快捷键提示；代码中没有为这些 row 完成对应的 .keyboardShortcut 绑定，这是潜在体验问题。
+- DashboardActionRow 已绑定真实的 ⌘R、⌘,、⌘Q；应用主菜单也提供同一组标准快捷键。
 - 菜单栏图标是自绘的简化 meter/percentage 图标；没有上游那种丰富的 provider-specific 图标布局。
-- 左键和右键状态项目前都走同一套 popover 行为。
+- 状态项左键打开 popover，右键打开原生 NSMenu；详情页支持滚动，主要控件和图表提供 VoiceOver 描述。
+- 单 Provider 详情窗观察共享 DashboardStore；刷新后会实时更新，而不是保留打开瞬间的静态副本。
+- 刷新失败会保留旧数据并明确显示 stale/error banner；刷新期间的新请求会合并为下一轮，而不是静默丢弃。
 
 ## 5. 与上游 steipete/CodexBar 的对比结论
 
@@ -123,22 +129,90 @@
 - macOS 14+ 且追求完整 provider/status/widget/更新体验：优先上游。
 - 本项目适合“每天看消费和整体趋势”；上游适合“长期监控配额重置、状态、账号和后台刷新”。
 
-## 6. 已知风险、文档差异和不要误判的地方
+## 6. 2026-08-01 原生体验重构完整记录
 
-1. README 中仍有“upstream native text details”一类描述，但当前 DetailsWindowController.showCost 实际调用 showUsage / AllProvidersDashboardView；CLIClient.detailedText 和 costText 方法存在，但没有发现调用点。修改详情页前要以当前代码为准，并考虑同步 README。
-2. 当前 branch 是 feature branch，不是 main；release workflow 的 appcast 发布阶段会把临时 worktree 建在 origin/main 上并推送 appcast.xml 到 main。
+这一节记录从 `main@bed623c` 开始的整轮改动。后续若代码与本节不一致，仍以代码、测试和 Git 历史为准，并立即更新本节。
+
+### 6.1 原生 macOS 交互与窗口
+
+- `MenuController` 现在区分左键与右键/Control-click：左键打开 SwiftUI popover，右键显示原生 `NSMenu`；应用主菜单提供 About、Settings、Refresh、Check for Updates 和 Quit，并绑定真实的 ⌘,、⌘R、⌘Q。
+- 状态栏项目按 snapshot/account 使用稳定 autosave ID；tooltip、accessibility label/value 包含账号、刷新和错误状态。任何入口触发刷新后都会重建并重绘状态栏项目，避免分离图标模式出现旧账号项目。
+- `DashboardViews` 增加 hover/pressed 反馈、真实 keyboard shortcuts、VoiceOver 描述、百分比/负数防御性 clamp、滚动详情，以及刷新失败时“保留旧数据 + 最后成功时间 + Retry”的 stale banner。
+- provider switcher 仅在同一 provider 出现多账号时显示账号副标题；header、详情窗和状态栏 tooltip 都显示账号身份。
+- `ProviderDetailPanelController` 改为观察共享 `DashboardStore` 的实时详情，不再保存打开瞬间的静态 dashboard；账号被禁用后显示明确空状态。
+- Settings、All Providers 和 Provider Detail 窗口均使用 frame autosave；首次详情窗仍定位到屏幕右上方。
+- 删除已无调用的 `ProviderMenuView.swift`、`QuotaBarView.swift`，以及旧 text/cost/detail/copy JSON 死代码，避免两套 UI 状态继续漂移。
+
+### 6.2 刷新状态、竞态和多账户隔离
+
+- `ProviderSnapshot.id` 现在综合 provider、usage identity/account email、顶层 account 和 organization，并统一大小写，避免同一 provider 的不同账号共用 dashboard/cache/status item。
+- `DashboardStore` 只使用精确 snapshot ID 保存 dashboard，不再写入 provider ID 别名；排序按 provider、账号和稳定 ID 进行。
+- 刷新期间的新请求通过 `refreshPending` 合并为下一轮，不再静默丢弃；失败时保留上次成功数据、`lastSuccessfulRefresh` 和错误状态。
+- supplemental enrichment 使用 `snapshotGeneration` 与按 generation 标记的 loading 状态，旧异步结果不能覆盖新刷新；富化开始时会重新解析当前代 snapshot，避免旧账号对象进入新代 dashboard。
+- 每次刷新会清理已消失账号/provider 的 supplemental cache。上游 `cost --provider` 没有 account selector，因此同一 provider 出现多个账号时主动禁用 provider 级 cost enrichment，防止一份账单复制到多个账号。
+
+### 6.3 本地额度与消费数据可信度
+
+- `LocalQuotaTrendStore` 升级到 `zai-five-hour-trend-v3.json`，按 provider + account hash 隔离；目录/文件权限为 0700/0600，忽略重复或倒序时间，统一排序、30 天清理并限制每账号 240 个样本。
+- z.ai 趋势继续只选择语义上的 300 分钟窗口，不会把 MCP/月度或最大百分比误当五小时 quota。
+- `LocalSpendHistoryStore` 使用共享稳定 hash 按 provider/account/currency 建账。五分钟内快速刷新不再替换原始基线，因此不会吞掉首次余额下降。
+- 超过两小时或跨午夜的余额下降无法诚实归属到某一天，改为 `unattributedIntervals` 并从 today/30-day estimate 排除；UI subtitle 会明确显示 uncertain interval unassigned。
+- spend ledger 使用 0700 目录、0600 文件，保留 180 天；余额增加、充值、退款或赠送额度变化继续作为 adjustment 排除，不写成负消费。
+
+### 6.4 Provider 配置事务与设置体验
+
+- `CodexBarConfigStore` 新增完整文件 backup/restore：原文件按原内容原子恢复并设为 0600；事务前不存在的配置在回滚时会删除，未知 root/provider 字段仍保留。
+- `CLIClient.saveCredential` 将写入、`config validate`、provider probe 合并为单一事务；任何阶段失败都会恢复旧配置，回滚失败会返回组合错误。日志只记录 provider ID，不输出凭据。
+- Settings 的 Save & Verify 只有在整个事务成功后才清空字段和广播刷新；busy 状态在创建 Task 前同步设置，防止双击并发。
+- provider reload 做合并保护；清浏览器缓存后会刷新 dashboard；清空凭据时同步关闭 reveal；设置与 provider 控件在操作期间禁用。
+- 原本指向不存在日志目录的按钮改为打开 Console.app，并提示搜索 `CodexBarMonterey`；dashboard 刷新失败使用 unified logging/`NSLog` 记录诊断。
+
+### 6.5 构建、Universal 2 与发布链路
+
+- `Scripts/engine_source_fingerprint.py` 对 `ENGINE_VERSION`、自身、fetch/patch 脚本、MontereyCompat 和所有 patch 做确定性 SHA-256 指纹。
+- `fetch_engine.sh` 写入 `.engine-version` 和 `.source-fingerprint`；`build_engine.sh` 检测版本/指纹不一致时重新拉取 vendor；`build_app.sh` 每次都运行增量 engine build，不再静默复用陈旧 helper。
+- `build_universal.sh` 会检查 arm64/x86_64 两边所有 Mach-O 组件是否一一对应，并在签名前递归验证输出 bundle 的每个 Mach-O 都同时包含 arm64 与 x86_64。
+- `smoke_test_app.sh` 同样递归检查全部 framework/XPC/updater/helper，而不只检查主程序和 CLI。
+- `appcast.xml` 从 `.gitignore` 移除，确保 Sparkle feed 能提交到 `main`；release workflow 使用 `git add --force` 保证生成产物可追踪。
+- release workflow 验证 tag commit 属于 `origin/main`，用 concurrency 串行化 appcast 发布，使用独立 `mktemp` worktree，并在 push appcast 前 rebase 最新 main。
+- build/release workflows 均运行 release contract 与 `swift test -c release`；release 仍从 tag 推导应用版本，不能为了 App release 修改 `ENGINE_VERSION`。
+
+### 6.6 新增与扩展的测试、文档
+
+- `Package.swift` 新增 `Tests/CodexBarMontereyTests/CoreBehaviorTests.swift`，覆盖账号身份、快速采样/长间隔不确定性和配置备份恢复。
+- 新增 `Scripts/local_spend_history_regression.swift`，覆盖快速刷新基线、多账号隔离、长间隔、跨午夜和 0600 权限。
+- quota/provider config 回归扩展到多账号、重载隔离、倒序时间、未知字段保留、旧配置恢复和新配置删除。
+- 新增 `Scripts/test_release_contract.py`，约束 appcast、tag/main、release concurrency、Universal 全组件验证以及 engine version/fingerprint。
+- Swift 回归 shell 和 patcher 使用临时 ModuleCache，可在本机 Swift 5.6 下运行；README 中英文版已说明本机轻量验证与 GitHub Swift 6.2 完整构建的边界。
+- `PROJECT_MEMORY.md` 本身加入本节和顶部防漂移警告；以后任何 materially changed architecture/release behavior 都应与代码在同一提交里更新记忆。
+
+### 6.7 本轮验证基线
+
+- 已通过 UI、release、offline smoke contract；Monterey patcher 完成 38 项变换并通过 Core/CLI semantic regression 与 API 扫描。
+- 已通过 typed cost parser、z.ai quota、local spend、provider auth/config 和 66-provider catalog audit。
+- 已通过 Shell/Python/YAML/Swift parse、`git diff --check`，以及 Swift 5.6 + macOS 12 SDK 的 dashboard/core typecheck。
+- 本机没有执行完整 SwiftPM 6.2、Sparkle 依赖解析和双架构 bundle；GitHub Actions 中的 `swift test -c release`、preflight、Universal build、codesign/compat/offline smoke 才是最终构建门禁。
+
+## 7. 已知风险、文档差异和不要误判的地方
+
+1. 图形化详情页只映射 dashboard parser 支持的字段；旧的未调用 text/cost UI client 方法已删除，原始字段需要通过 bundled CLI 查看。
+2. release workflow 会验证 tag commit 属于 `origin/main`，并串行化 appcast 发布；`appcast.xml` 必须保持可追踪，不能重新加入 `.gitignore`。
 3. 没有 SPARKLE_PUBLIC_KEY / SPARKLE_PRIVATE_KEY 时，zip/checksum 仍可能发布，但不会生成签名 appcast，Sparkle 自动更新链路不完整。
 4. 没有 Developer ID 签名和 Apple notarization secrets 时，workflow 会使用 ad-hoc signing；公开分发时会遇到 Gatekeeper 信任/安装体验问题。
-5. 本地 Swift 校验曾因当前机器的 Swift/Clang ModuleCache 无法加载 macOS 12 标准库而失败，不应把这个环境问题当成代码已验证成功或代码必然失败。CI（macOS 26 runner）是 release gate。
+5. 本机 Swift 5.6 不能读取 `swift-tools-version: 6.2` manifest；轻量 Swift 回归脚本与 patcher 已使用临时 ModuleCache，可本地运行，但完整 App/Sparkle 编译仍以 macOS 26 CI 为 release gate。
 6. 自定义 dashboard 对丰富 provider 字段做了压缩；如果新增 provider 字段，先检查 parser 的 typed path、generic fallback、metrics 上限 4、quota lane 上限 8 是否会丢信息。
 7. 本地 spend history 是余额差估算，不应在 UI 或 release note 中写成 provider 官方账单。
 
-## 7. 验证命令
+## 8. 验证命令
 
 低成本静态检查：
 
 ~~~bash
 python3 Scripts/test_ui_contract.py
+python3 Scripts/test_release_contract.py
+python3 Scripts/test_monterey_patcher.py
+Scripts/test_cost_history_parser.sh
+Scripts/test_provider_auth.sh
 bash -n Scripts/*.sh
 ~~~
 
@@ -148,19 +222,19 @@ release workflow 还会执行：
 python3 Scripts/test_monterey_patcher.py
 python3 Scripts/test_smoke_contract.py
 python3 Scripts/test_ui_contract.py
+python3 Scripts/test_release_contract.py
 bash Scripts/test_cost_history_parser.sh
 bash Scripts/test_provider_auth.sh
 python3 Scripts/validate_provider_auth_catalog.py
 swiftc -typecheck -target arm64-apple-macosx12.0 \
-  Sources/CodexBarMonterey/MontereyCompat.swift \
   Patches/MontereyCompat.swift
 ~~~
 
-之后会运行 menu target preflight、Scripts/build_universal.sh、macOS 12 compatibility/codesign 检查和离线 bundle smoke test。不要只因为某个 Python contract test 通过就认为 Universal app 可运行。
+配置构建后，CI 还会运行 `swift test -c release`、menu target preflight、`Scripts/build_universal.sh`、macOS 12 compatibility/codesign 检查和离线 bundle smoke test。不要只因为某个 Python contract test 通过就认为 Universal app 可运行。
 
-## 8. 0.6.0 release runbook
+## 9. 下一版本 release runbook
 
-### 8.1 发布前确认
+### 9.1 发布前确认
 
 ~~~bash
 git status --short --branch
@@ -171,30 +245,28 @@ git diff --stat origin/main...HEAD
 
 确认：
 
-- 所有 0.6.0 代码已经提交并推送到当前 feature branch；
-- 不把 ENGINE_VERSION 从 v0.46.0 改成 0.6.0；它代表 bundled upstream engine 版本；
-- 不需要把 Config/build.env.example 的 APP_VERSION=0.1.0 改成 0.6.0；workflow 会从 tag 推导版本，并在 CI 临时替换 build.env；
+- 下一版本代码已经提交并位于 `main` 的目标 release commit；
+- 不要为了应用 release 改 `ENGINE_VERSION`；它只代表 bundled upstream engine 版本；
+- 不需要把 `Config/build.env.example` 的 `APP_VERSION` 改成 release 版本；workflow 会从 tag 推导，并在 CI 临时替换 build.env；
 - 不提交真实的 Config/build.env、Sparkle 私钥或签名证书。
 
-### 8.2 推荐的 Git 操作
+### 9.2 推荐的 Git 操作
 
-当前 feature 分支的提交是 origin/main 的线性后续时，可用：
+准备好新的、尚未使用过的 `vX.Y.Z` 后，可用：
 
 ~~~bash
 git switch main
 git pull --ff-only origin main
-git merge --ff-only origin/fix/deepseek-zai-dashboard
-git push origin main
-
-git tag -a v0.6.0 -m "CodexBar Monterey 0.6.0"
-git push origin v0.6.0
+git status --short
+git tag -a vX.Y.Z -m "CodexBar Monterey X.Y.Z"
+git push origin vX.Y.Z
 ~~~
 
-如果仓库保护规则不允许直接推送 main，先通过 GitHub PR 合并 feature branch，再在合并后的 main 提交上创建 tag。不要在未合入 main 的 feature commit 上直接发布，除非你明确接受 appcast 阶段和正式分支不一致的风险。
+如果仓库保护规则要求 PR，先合并，再在合并后的 `main` 提交上创建 tag。workflow 会直接拒绝不属于 `origin/main` 的 release tag。
 
-tag 必须是 v0.6.0，不能只推 0.6.0：workflow 使用 v* trigger，并会将 v 去掉后设置 APP_VERSION=0.6.0。
+tag 必须以 `v` 开头并符合语义版本，例如 `v0.7.0`，不能只推 `0.7.0`。
 
-### 8.3 GitHub Actions 配置
+### 9.3 GitHub Actions 配置
 
 在仓库 Settings → Secrets and variables → Actions 配置：
 
@@ -217,14 +289,14 @@ tag 必须是 v0.6.0，不能只推 0.6.0：workflow 使用 v* trigger，并会�
 
 release.yml 会生成：
 
-- releases/CodexBar-Monterey-0.6.0.zip
+- releases/CodexBar-Monterey-X.Y.Z.zip
 - releases/SHA256SUMS.txt
 - 配置完整 Sparkle keys 时额外生成并发布 appcast.xml，然后更新 main 上的 appcast。
 
-### 8.4 发布后验证
+### 9.4 发布后验证
 
 ~~~bash
-git ls-remote --tags origin v0.6.0
+git ls-remote --tags origin vX.Y.Z
 ~~~
 
 然后在 Actions 中确认 Publish GitHub Release 成功，检查 GitHub Release 的 zip/checksum/appcast 资产。下载 zip 后至少验证：
@@ -236,19 +308,19 @@ git ls-remote --tags origin v0.6.0
 - 若配置 Sparkle，appcast URL、签名和升级链路可用；
 - 若 ad-hoc，明确在 release note 中说明不是 notarized build。
 
-### 8.5 常见失败处理
+### 9.5 常见失败处理
 
 - contract/test 失败：先看 Actions 失败步骤；不要跳过测试直接重发。
 - build/codesign 失败：确认 bundle 内 arm64/x86_64、Developer ID secrets 和证书密码；没有签名条件时应接受 ad-hoc 或补齐 secrets。
 - notarization 失败：检查 Apple ID、Team ID、app-specific password 是否对应同一开发者账号；这不一定意味着编译失败。
 - appcast 失败：先确认两个 Sparkle secrets、origin/main 可读写、workflow 的 GitHub token 有 contents write；GitHub Release 资产可能已经存在，修复后优先 rerun workflow，避免盲目重复创建同一 tag。
-- 本地 Swift ModuleCache 失败：换到 CI/macOS SDK 验证；不要用清理整个用户目录等破坏性操作解决。
+- 完整本地 SwiftPM 构建失败：先确认 Xcode/Swift 是否达到 6.2；Swift 5.6 只运行轻量回归，完整验证交给 CI。不要用清理整个用户目录等破坏性操作解决。
 
-## 9. 后续 agent 的工作方式
+## 10. 后续 agent 的工作方式
 
-1. 先读本文件，再检查 git status、git log -5、git branch -vv；不要假设快照中的 HEAD 仍然是当前 HEAD。
+1. 每次都先把本文件视为“可能已漂移”，再读本文件并检查 git status、git log -5、git branch -vv；不要假设快照中的 branch、HEAD、CI、tag 或发布状态仍然成立，也不要仅凭历史对话继续操作。
 2. 修改 provider 数据时沿着 CLI → patch/env → CLIClient → parser → view → contract tests 全链路核对。
 3. 修改 UI 时优先保持 Monterey 的 fixed-size popover、AppKit 生命周期和 accessibility；不要未经确认引入 macOS 14-only API。
 4. 修改发布逻辑时先读完整 .github/workflows/release.yml、Scripts/build_universal.sh 和 Scripts/generate_appcast.sh。
 5. 任何涉及真实发布、tag push、GitHub Release、证书或 notarization 的操作，都先给出将要触发的外部效果；除非用户明确要求，不要代替用户 push/tag。
-
+6. 架构、数据 contract、关键交互、验证门禁或 release runbook 发生实质变化时，必须在同一提交更新本文件；不能把“以后再补记忆”留给下一次对话。

@@ -27,6 +27,7 @@ private enum DashboardTheme {
     static let popoverHeight: CGFloat = 520
     static let detailWidth: CGFloat = 360
     static let detailHeight: CGFloat = 430
+    static let switcherRowHeight: CGFloat = 58
 
     static let backgroundTop = Color(red: 0.035, green: 0.075, blue: 0.19)
     static let backgroundBottom = Color(red: 0.020, green: 0.040, blue: 0.115)
@@ -47,7 +48,8 @@ struct DashboardPopoverView: View {
     }
 
     private var switcherHeight: CGFloat {
-        CGFloat(visibleSwitcherRows * 52 + max(0, visibleSwitcherRows - 1) * 6)
+        CGFloat(visibleSwitcherRows) * DashboardTheme.switcherRowHeight +
+            CGFloat(max(0, visibleSwitcherRows - 1) * 6)
     }
 
     var body: some View {
@@ -82,6 +84,7 @@ struct DashboardPopoverView: View {
                     ProviderSwitcherButton(
                         snapshot: snapshot,
                         selected: store.selectedSnapshot?.id == snapshot.id,
+                        showAccount: store.snapshots.filter { $0.provider == snapshot.provider }.count > 1,
                         action: { store.select(snapshot) })
                 }
             }
@@ -100,7 +103,7 @@ struct DashboardPopoverView: View {
                     .lineLimit(1)
             }
             .foregroundColor(.white.opacity(0.82))
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .frame(maxWidth: .infinity, minHeight: DashboardTheme.switcherRowHeight)
             .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.035)))
         }
         .buttonStyle(PlainButtonStyle())
@@ -118,6 +121,12 @@ struct DashboardPopoverView: View {
         if let dashboard = store.selectedDashboard, let snapshot = store.selectedSnapshot {
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 9) {
+                    if let refreshError = store.lastError, !store.isRefreshing {
+                        RefreshStatusBanner(
+                            message: refreshError,
+                            lastSuccessfulRefresh: store.lastSuccessfulRefresh,
+                            retry: { Task { await store.refresh() } })
+                    }
                     ProviderHeaderView(snapshot: snapshot, dashboard: dashboard)
                     if let error = dashboard.errorMessage {
                         ErrorCard(message: error, providerID: dashboard.id) {
@@ -125,7 +134,7 @@ struct DashboardPopoverView: View {
                         }
                     }
                     DashboardSummaryCard(dashboard: dashboard) {
-                        store.onOpenProviderDetails?(snapshot.provider)
+                        store.onOpenProviderDetails?(snapshot.id)
                     }
                     quotaSection(dashboard)
                 }
@@ -169,22 +178,24 @@ struct DashboardPopoverView: View {
                 title: "Usage Dashboard",
                 symbol: "chart.bar.xaxis",
                 enabled: store.selectedDashboard?.dashboardURL != nil,
-                action: store.openDashboardURL)
+                action: { store.openDashboardURL() })
             DashboardActionRow(
                 title: "Status Page",
                 symbol: "waveform.path.ecg",
                 enabled: store.selectedDashboard?.statusURL != nil,
-                action: store.openStatusURL)
+                action: { store.openStatusURL() })
             DashboardActionRow(
                 title: store.isRefreshing ? "Refreshing…" : "Refresh",
                 symbol: "arrow.clockwise",
                 shortcut: "⌘R",
+                keyEquivalent: "r",
                 enabled: !store.isRefreshing,
                 action: { Task { await store.refresh() } })
             DashboardActionRow(
                 title: "Settings…",
                 symbol: "gearshape",
                 shortcut: "⌘,",
+                keyEquivalent: ",",
                 action: { store.onOpenSettings?() })
             DashboardActionRow(
                 title: "About CodexBar",
@@ -194,14 +205,55 @@ struct DashboardPopoverView: View {
                 title: "Quit",
                 symbol: "power",
                 shortcut: "⌘Q",
+                keyEquivalent: "q",
                 action: { store.onQuit?() })
         }
+    }
+}
+
+private struct RefreshStatusBanner: View {
+    let message: String
+    let lastSuccessfulRefresh: Date?
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                .foregroundColor(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Refresh failed — showing saved data")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(detailText)
+                    .font(.system(size: 9))
+                    .foregroundColor(.white.opacity(0.60))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            Button("Retry", action: retry)
+                .buttonStyle(CompactProminentButtonStyle(color: .orange))
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.orange.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(Color.orange.opacity(0.30), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Refresh failed. Showing saved data. \(message)"))
+    }
+
+    private var detailText: String {
+        if let date = lastSuccessfulRefresh {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            formatter.dateStyle = .none
+            return "Last successful refresh \(formatter.string(from: date)) · \(message)"
+        }
+        return message
     }
 }
 
 private struct ProviderSwitcherButton: View {
     let snapshot: ProviderSnapshot
     let selected: Bool
+    let showAccount: Bool
     let action: () -> Void
 
     var body: some View {
@@ -210,22 +262,51 @@ private struct ProviderSwitcherButton: View {
                 Image(systemName: ProviderBrand.symbol(for: snapshot.provider))
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(selected ? .white : ProviderBrand.color(for: snapshot.provider))
-                Text(snapshot.displayName)
-                    .font(.system(size: 10, weight: .medium))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                VStack(spacing: 0) {
+                    Text(snapshot.displayName)
+                        .font(.system(size: 10, weight: .medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    if showAccount, let account = snapshot.accountDisplayName {
+                        Text(account)
+                            .font(.system(size: 8))
+                            .foregroundColor(.white.opacity(0.55))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    }
+                }
                 SwitcherUsageBar(
                     percent: snapshot.provider == "deepseek" ? nil : snapshot.maximumUsedPercent,
                     color: ProviderBrand.color(for: snapshot.provider))
             }
             .foregroundColor(.white.opacity(0.78))
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .frame(maxWidth: .infinity, minHeight: DashboardTheme.switcherRowHeight)
             .padding(.horizontal, 3)
             .background(
                 RoundedRectangle(cornerRadius: 9)
                     .fill(selected ? DashboardTheme.selection.opacity(0.88) : Color.white.opacity(0.025)))
         }
         .buttonStyle(PlainButtonStyle())
+        .accessibilityLabel(Text(accessibilityLabel))
+        .accessibilityValue(Text(accessibilityValue))
+        .accessibilityHint(Text("Switches the visible provider dashboard"))
+    }
+
+    private var accessibilityLabel: String {
+        if let account = snapshot.accountDisplayName {
+            return "\(snapshot.displayName), \(account)"
+        }
+        return snapshot.displayName
+    }
+
+    private var accessibilityValue: String {
+        if snapshot.provider == "deepseek" {
+            return "Usage details available"
+        }
+        guard let percent = snapshot.maximumUsedPercent else {
+            return "Usage unavailable"
+        }
+        return String(format: "%.0f percent used", max(0, min(100, percent)))
     }
 }
 
@@ -273,9 +354,15 @@ private struct ProviderHeaderView: View {
                             .background(Capsule().fill(Color.white.opacity(0.10)))
                     }
                 }
-                Text(dashboard.updatedText)
-                    .font(.system(size: 11))
-                    .foregroundColor(.white.opacity(0.55))
+                HStack(spacing: 5) {
+                    if let account = snapshot.accountDisplayName {
+                        Text(account).lineLimit(1)
+                        Text("·")
+                    }
+                    Text(dashboard.updatedText)
+                }
+                .font(.system(size: 11))
+                .foregroundColor(.white.opacity(0.55))
             }
             Spacer()
             if let plan = snapshot.plan, !plan.isEmpty {
@@ -427,7 +514,7 @@ struct QuotaLaneView: View {
                     Capsule().fill(Color.white.opacity(0.09))
                     Capsule()
                         .fill(color)
-                        .frame(width: geometry.size.width * CGFloat(lane.usedPercent / 100))
+                        .frame(width: geometry.size.width * CGFloat(max(0, min(100, lane.usedPercent)) / 100))
                 }
             }
             .frame(height: 5)
@@ -441,6 +528,9 @@ struct QuotaLaneView: View {
             }
         }
         .padding(.horizontal, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(lane.title))
+        .accessibilityValue(Text(String(format: "%.0f percent used", max(0, min(100, lane.usedPercent)))))
     }
 }
 
@@ -448,10 +538,23 @@ private struct DashboardActionRow: View {
     let title: String
     let symbol: String
     var shortcut: String? = nil
+    var keyEquivalent: KeyEquivalent? = nil
     var enabled: Bool = true
     let action: () -> Void
 
+    @State private var isHovering = false
+
     var body: some View {
+        Group {
+            if let keyEquivalent = keyEquivalent {
+                rowButton.keyboardShortcut(keyEquivalent, modifiers: .command)
+            } else {
+                rowButton
+            }
+        }
+    }
+
+    private var rowButton: some View {
         Button(action: action) {
             HStack(spacing: 10) {
                 Image(systemName: symbol)
@@ -471,6 +574,12 @@ private struct DashboardActionRow: View {
         }
         .buttonStyle(DashboardRowButtonStyle())
         .disabled(!enabled)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(isHovering && enabled ? Color.white.opacity(0.07) : Color.clear))
+        .onHover { isHovering = $0 }
+        .accessibilityLabel(Text(title))
+        .accessibilityValue(Text(enabled ? "Available" : "Unavailable"))
     }
 }
 
@@ -502,13 +611,24 @@ struct MiniHistoryChart: View {
                     RoundedRectangle(cornerRadius: 2)
                         .fill(Color.white.opacity(0.82))
                         .frame(maxWidth: .infinity)
-                        .frame(height: max(2, geometry.size.height * CGFloat(value / maxValue)))
+                        .frame(height: max(2, geometry.size.height * CGFloat(max(0, value) / maxValue)))
                 }
             }
             .overlay(alignment: .bottom) {
                 Rectangle().fill(color.opacity(0.24)).frame(height: 1)
             }
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text("Usage history"))
+        .accessibilityValue(Text(historyAccessibilityValue))
+    }
+
+    private var historyAccessibilityValue: String {
+        let safeValues = values.map { max(0, $0) }
+        guard let latest = safeValues.last, let peak = safeValues.max() else {
+            return "No history"
+        }
+        return "\(safeValues.count) periods, latest \(compactNumber(latest)), peak \(compactNumber(peak))"
     }
 }
 
@@ -524,7 +644,7 @@ private struct QuotaBarChart: View {
                         Spacer(minLength: 0)
                         RoundedRectangle(cornerRadius: 4)
                             .fill(Color.white.opacity(0.84))
-                            .frame(height: max(4, geometry.size.height * CGFloat(quota.usedPercent / 100) * 0.78))
+                            .frame(height: max(4, geometry.size.height * CGFloat(max(0, min(100, quota.usedPercent)) / 100) * 0.78))
                         Text(quota.title)
                             .font(.system(size: 9, weight: .medium))
                             .foregroundColor(.white.opacity(0.64))
@@ -533,6 +653,37 @@ private struct QuotaBarChart: View {
                     .frame(maxWidth: .infinity)
                 }
             }
+        }
+    }
+}
+
+struct LiveProviderDetailPanelView: View {
+    @ObservedObject var store: DashboardStore
+    let snapshotID: String
+
+    var body: some View {
+        Group {
+            if let snapshot = store.snapshots.first(where: { $0.id == snapshotID }) {
+                ProviderDetailPanelView(dashboard: store.dashboard(for: snapshot))
+            } else {
+                ZStack {
+                    VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+                        .ignoresSafeArea()
+                    VStack(spacing: 10) {
+                        Image(systemName: "person.crop.circle.badge.xmark")
+                            .font(.system(size: 30))
+                        Text("This provider account is no longer enabled.")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundColor(.secondary)
+                }
+                .frame(width: DashboardTheme.detailWidth, height: DashboardTheme.detailHeight)
+                .preferredColorScheme(.dark)
+            }
+        }
+        .task {
+            guard let snapshot = store.snapshots.first(where: { $0.id == snapshotID }) else { return }
+            await store.enrich(snapshot)
         }
     }
 }
@@ -550,61 +701,75 @@ struct ProviderDetailPanelView: View {
                 endPoint: .bottomTrailing)
                 .opacity(0.94)
                 .ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(dashboard.title)
-                            .font(.system(size: 17, weight: .bold))
-                        Text(dashboard.updatedText)
-                            .font(.system(size: 11))
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                    Spacer()
-                    Image(systemName: ProviderBrand.symbol(for: dashboard.id))
-                        .font(.system(size: 21, weight: .semibold))
-                        .foregroundColor(ProviderBrand.color(for: dashboard.id))
-                }
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
-                    ForEach(dashboard.metrics) { metric in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(metric.title).font(.system(size: 10, weight: .semibold)).foregroundColor(.white.opacity(0.52))
-                            Text(metric.value).font(.system(size: 16, weight: .bold)).lineLimit(1).minimumScaleFactor(0.7)
-                            if let subtitle = metric.subtitle {
-                                Text(subtitle)
-                                    .font(.system(size: 9))
-                                    .foregroundColor(.white.opacity(0.46))
-                                    .lineLimit(2)
-                                    .fixedSize(horizontal: false, vertical: true)
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(dashboard.title)
+                                .font(.system(size: 17, weight: .bold))
+                            Text(dashboard.updatedText)
+                                .font(.system(size: 11))
+                                .foregroundColor(.white.opacity(0.5))
+                            if let account = dashboard.accountLabel {
+                                Text(account)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.68))
+                                    .lineLimit(1)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.05)))
+                        Spacer()
+                        Image(systemName: ProviderBrand.symbol(for: dashboard.id))
+                            .font(.system(size: 21, weight: .semibold))
+                            .foregroundColor(ProviderBrand.color(for: dashboard.id))
                     }
-                }
-                if !dashboard.history.isEmpty {
-                    if dashboard.id == "zai" {
-                        Text("Hourly token usage")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.58))
-                    }
-                    DetailedHistoryChart(points: dashboard.history, providerID: dashboard.id)
-                        .frame(height: 210)
-                } else {
-                    VStack(spacing: 10) {
-                        ForEach(dashboard.quotas) { lane in
-                            QuotaLaneView(lane: lane, color: ProviderBrand.color(for: dashboard.id))
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
+                        ForEach(dashboard.metrics) { metric in
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(metric.title)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.52))
+                                Text(metric.value)
+                                    .font(.system(size: 16, weight: .bold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                                if let subtitle = metric.subtitle {
+                                    Text(subtitle)
+                                        .font(.system(size: 9))
+                                        .foregroundColor(.white.opacity(0.46))
+                                        .lineLimit(2)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.05)))
                         }
                     }
+                    if !dashboard.history.isEmpty {
+                        if dashboard.id == "zai" {
+                            Text("Hourly token usage")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.58))
+                        }
+                        DetailedHistoryChart(points: dashboard.history, providerID: dashboard.id)
+                            .frame(height: 210)
+                    } else {
+                        VStack(spacing: 10) {
+                            ForEach(dashboard.quotas) { lane in
+                                QuotaLaneView(lane: lane, color: ProviderBrand.color(for: dashboard.id))
+                            }
+                        }
+                    }
+                    if let topModel = dashboard.topModel {
+                        Text("Top model: \(topModel)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.58))
+                            .lineLimit(1)
+                    }
                 }
-                if let topModel = dashboard.topModel {
-                    Text("Top model: \(topModel)")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.white.opacity(0.58))
-                        .lineLimit(1)
-                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(14)
             }
-            .padding(14)
         }
         .frame(width: DashboardTheme.detailWidth, height: DashboardTheme.detailHeight)
         .preferredColorScheme(.dark)
@@ -655,7 +820,7 @@ private struct LineHistoryChart: View {
                     let maximum = max(fixedMaximum ?? values.max() ?? 1, 1)
                     for (index, value) in values.enumerated() {
                         let x = values.count == 1 ? 0 : geometry.size.width * CGFloat(index) / CGFloat(values.count - 1)
-                        let y = geometry.size.height * (1 - CGFloat(value / maximum))
+                        let y = geometry.size.height * (1 - CGFloat(max(0, value) / maximum))
                         if index == 0 { path.move(to: CGPoint(x: x, y: y)) }
                         else { path.addLine(to: CGPoint(x: x, y: y)) }
                     }
@@ -672,7 +837,7 @@ private struct LineHistoryChart: View {
                             path.move(to: CGPoint(x: 0, y: geometry.size.height))
                             for (index, value) in values.enumerated() {
                                 let x = values.count == 1 ? 0 : geometry.size.width * CGFloat(index) / CGFloat(values.count - 1)
-                                let y = geometry.size.height * (1 - CGFloat(value / maximum))
+                                let y = geometry.size.height * (1 - CGFloat(max(0, value) / maximum))
                                 path.addLine(to: CGPoint(x: x, y: y))
                             }
                             path.addLine(to: CGPoint(x: geometry.size.width, y: geometry.size.height))
@@ -685,7 +850,6 @@ private struct LineHistoryChart: View {
 
 struct AllProvidersDashboardView: View {
     @ObservedObject var store: DashboardStore
-    var selectedProvider: String?
 
     private let columns = [GridItem(.adaptive(minimum: 300, maximum: 420), spacing: 16)]
 
@@ -700,21 +864,29 @@ struct AllProvidersDashboardView: View {
                 .opacity(0.94)
                 .ignoresSafeArea()
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 16) {
-                    ForEach(filteredSnapshots) { snapshot in
-                        let dashboard = store.dashboard(for: snapshot)
-                        VStack(alignment: .leading, spacing: 10) {
-                            ProviderHeaderView(snapshot: snapshot, dashboard: dashboard)
-                            DashboardSummaryCard(dashboard: dashboard) {
-                                store.onOpenProviderDetails?(snapshot.provider)
+                VStack(spacing: 16) {
+                    if let refreshError = store.lastError, !store.isRefreshing {
+                        RefreshStatusBanner(
+                            message: refreshError,
+                            lastSuccessfulRefresh: store.lastSuccessfulRefresh,
+                            retry: { Task { await store.refresh() } })
+                    }
+                    LazyVGrid(columns: columns, spacing: 16) {
+                        ForEach(store.snapshots) { snapshot in
+                            let dashboard = store.dashboard(for: snapshot)
+                            VStack(alignment: .leading, spacing: 10) {
+                                ProviderHeaderView(snapshot: snapshot, dashboard: dashboard)
+                                DashboardSummaryCard(dashboard: dashboard) {
+                                    store.onOpenProviderDetails?(snapshot.id)
+                                }
+                                ForEach(dashboard.quotas) { lane in
+                                    QuotaLaneView(lane: lane, color: ProviderBrand.color(for: snapshot.provider))
+                                }
                             }
-                            ForEach(dashboard.quotas) { lane in
-                                QuotaLaneView(lane: lane, color: ProviderBrand.color(for: snapshot.provider))
-                            }
+                            .padding(15)
+                            .background(RoundedRectangle(cornerRadius: 14).fill(Color.black.opacity(0.18)))
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.09), lineWidth: 1))
                         }
-                        .padding(15)
-                        .background(RoundedRectangle(cornerRadius: 14).fill(Color.black.opacity(0.18)))
-                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.09), lineWidth: 1))
                     }
                 }
                 .padding(20)
@@ -724,15 +896,10 @@ struct AllProvidersDashboardView: View {
         .frame(minWidth: 680, minHeight: 500)
         .task {
             if store.snapshots.isEmpty { await store.refresh() }
-            for snapshot in filteredSnapshots.prefix(8) {
+            for snapshot in store.snapshots.prefix(8) {
                 await store.enrich(snapshot)
             }
         }
-    }
-
-    private var filteredSnapshots: [ProviderSnapshot] {
-        guard let selectedProvider = selectedProvider else { return store.snapshots }
-        return store.snapshots.filter { $0.provider == selectedProvider || $0.id == selectedProvider }
     }
 }
 

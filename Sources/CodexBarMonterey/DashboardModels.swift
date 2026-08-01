@@ -61,6 +61,7 @@ struct DashboardHistorySummary: Hashable {
 struct ProviderDashboard: Identifiable, Hashable {
     let id: String
     let title: String
+    let accountLabel: String?
     let source: String?
     let updatedText: String
     let metrics: [DashboardMetric]
@@ -75,6 +76,7 @@ struct ProviderDashboard: Identifiable, Hashable {
         ProviderDashboard(
             id: providerID,
             title: title,
+            accountLabel: nil,
             source: nil,
             updatedText: "Refreshing…",
             metrics: [],

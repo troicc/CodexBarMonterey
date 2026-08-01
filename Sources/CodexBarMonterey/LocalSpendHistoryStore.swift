@@ -46,6 +46,7 @@ final class LocalSpendHistoryStore {
         let last30DaysSpend: Double
         let intervalCount: Int
         let adjustmentIntervals: Int
+        let unattributedIntervals: Int
         let daily: [DailySpend]
     }
 
@@ -56,6 +57,7 @@ final class LocalSpendHistoryStore {
     private let fileURL: URL
     private let calendar: Calendar
     private let minimumSampleInterval: TimeInterval
+    private let maximumAttributableInterval: TimeInterval
     private let retentionInterval: TimeInterval
     private let lock = NSLock()
 
@@ -63,20 +65,24 @@ final class LocalSpendHistoryStore {
         directoryURL: URL? = nil,
         calendar: Calendar = .current,
         minimumSampleInterval: TimeInterval = 5 * 60,
+        maximumAttributableInterval: TimeInterval = 2 * 60 * 60,
         retentionInterval: TimeInterval = 180 * 24 * 60 * 60
     ) {
         let baseURL: URL
         if let directoryURL = directoryURL {
             baseURL = directoryURL
         } else {
-            baseURL = FileManager.default.urls(
+            let applicationSupport = FileManager.default.urls(
                 for: .applicationSupportDirectory,
-                in: .userDomainMask).first!
+                in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+            baseURL = applicationSupport
                 .appendingPathComponent("CodexBarMonterey", isDirectory: true)
         }
         self.fileURL = baseURL.appendingPathComponent("local-spend-history.json")
         self.calendar = calendar
-        self.minimumSampleInterval = max(0, minimumSampleInterval)
+        let normalizedMinimum = max(0, minimumSampleInterval)
+        self.minimumSampleInterval = normalizedMinimum
+        self.maximumAttributableInterval = max(normalizedMinimum, maximumAttributableInterval)
         self.retentionInterval = max(24 * 60 * 60, retentionInterval)
     }
 
@@ -111,7 +117,7 @@ final class LocalSpendHistoryStore {
         defer { lock.unlock() }
 
         var store = loadStore()
-        let accountHash = Self.stableHash(accountKey)
+        let accountHash = StableIdentifier.hash(accountKey)
         let ledgerKey = [provider.lowercased(), accountHash, observation.currencyCode].joined(separator: "::")
         var ledger = store.ledgers[ledgerKey] ?? Ledger(
             provider: provider.lowercased(),
@@ -143,10 +149,12 @@ final class LocalSpendHistoryStore {
             return
         }
 
-        if sample.timestamp.timeIntervalSince(last.timestamp) < minimumSampleInterval {
-            if sample.timestamp >= last.timestamp {
-                samples[samples.count - 1] = sample
-            }
+        let interval = sample.timestamp.timeIntervalSince(last.timestamp)
+        guard interval > 0 else { return }
+        if interval < minimumSampleInterval {
+            // Keep the original baseline. Replacing it would erase balance drops
+            // observed during frequent/manual refreshes. The current balance is
+            // still returned to the UI separately from the persisted ledger.
             return
         }
         samples.append(sample)
@@ -162,6 +170,7 @@ final class LocalSpendHistoryStore {
 
         var daily: [Date: Double] = [:]
         var adjustmentIntervals = 0
+        var unattributedIntervals = 0
         var spendIntervals = 0
 
         for pair in zip(samples, samples.dropFirst()) {
@@ -177,6 +186,16 @@ final class LocalSpendHistoryStore {
                 continue
             }
             guard totalDelta > 0.000_001 else { continue }
+            let interval = next.timestamp.timeIntervalSince(previous.timestamp)
+            guard interval > 0,
+                  interval <= maximumAttributableInterval,
+                  calendar.isDate(previous.timestamp, inSameDayAs: next.timestamp)
+            else {
+                // A long/offline or cross-midnight interval cannot honestly be
+                // assigned to the day on which the app happened to observe it.
+                unattributedIntervals += 1
+                continue
+            }
             let day = calendar.startOfDay(for: next.timestamp)
             daily[day, default: 0] += totalDelta
             spendIntervals += 1
@@ -213,6 +232,7 @@ final class LocalSpendHistoryStore {
             last30DaysSpend: last30DaysSpend,
             intervalCount: spendIntervals,
             adjustmentIntervals: adjustmentIntervals,
+            unattributedIntervals: unattributedIntervals,
             daily: dailyPayload))
 
         let encoder = JSONEncoder()
@@ -236,24 +256,22 @@ final class LocalSpendHistoryStore {
 
     private func saveStore(_ store: StoreFile) {
         do {
+            let directoryURL = fileURL.deletingLastPathComponent()
             try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
+                at: directoryURL,
                 withIntermediateDirectories: true)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: directoryURL.path)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let data = try encoder.encode(store)
             try data.write(to: fileURL, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: fileURL.path)
         } catch {
             // Dashboard refresh must remain non-fatal if persistence is denied.
         }
-    }
-
-    private static func stableHash(_ value: String) -> String {
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in value.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        return String(format: "%016llx", hash)
     }
 }

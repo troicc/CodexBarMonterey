@@ -212,8 +212,11 @@ actor CLIServeOperationCoordinator<Value: Sendable> {
         # Compile the exact path-rewrite regression fixtures. This catches semantic
         # corruption that a string-only scan cannot detect (the previous failure
         # changed a Wayfinder helper call into a URL method call on `self`).
-        subprocess.run([
-            "swiftc", "-typecheck",
+        module_cache = project / "SwiftModuleCache"
+        module_cache.mkdir()
+        swiftc = ["swiftc", "-module-cache-path", str(module_cache)]
+        subprocess.run(swiftc + [
+            "-typecheck",
             str(core / "Providers/Devin/DevinUsageFetcher.swift"),
             str(core / "Providers/ElevenLabs/ElevenLabsUsageFetcher.swift"),
             str(core / "Providers/NeuralWatt/NeuralWattUsageFetcher.swift"),
@@ -226,14 +229,14 @@ actor CLIServeOperationCoordinator<Value: Sendable> {
         # sleep(until:) compatibility before the full SwiftPM build starts.
         module_dir = project / "SwiftModules"
         module_dir.mkdir()
-        subprocess.run([
-            "swiftc", "-emit-module", "-parse-as-library",
+        subprocess.run(swiftc + [
+            "-emit-module", "-parse-as-library",
             "-module-name", "CodexBarCore",
             str(core / "MontereyCompat.swift"),
             "-emit-module-path", str(module_dir / "CodexBarCore.swiftmodule"),
         ], check=True)
-        subprocess.run([
-            "swiftc", "-typecheck", "-I", str(module_dir),
+        subprocess.run(swiftc + [
+            "-typecheck", "-I", str(module_dir),
             str(cli / "CLIServeCommand.swift"),
             str(cli / "CLIServeOperationCoordinator.swift"),
         ], check=True)

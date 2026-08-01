@@ -13,7 +13,9 @@ final class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false)
         window.title = "CodexBar Monterey Settings"
-        window.center()
+        let frameName = "CodexBarMonterey.SettingsWindow"
+        if !window.setFrameUsingName(frameName) { window.center() }
+        window.setFrameAutosaveName(frameName)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.contentViewController = NSHostingController(rootView: SettingsRootView(store: store))
@@ -26,7 +28,7 @@ final class SettingsWindowController: NSWindowController {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        Task { await store.reloadProviders() }
+        if !store.isBusy { Task { await store.reloadProviders() } }
     }
 }
 
@@ -60,6 +62,7 @@ final class SettingsStore: ObservableObject {
     private let client: CLIClient
     private let updater: UpdaterController
     private var requestedProviderID: String?
+    private var isReloadingProviders = false
 
     init(client: CLIClient, updater: UpdaterController) {
         self.client = client
@@ -110,8 +113,13 @@ final class SettingsStore: ObservableObject {
     }
 
     func reloadProviders() async {
+        guard !isReloadingProviders else { return }
+        isReloadingProviders = true
         isBusy = true
-        defer { isBusy = false }
+        defer {
+            isBusy = false
+            isReloadingProviders = false
+        }
         do {
             providers = try await client.listProviders()
             let target = requestedProviderID ?? selectedProviderID
@@ -139,8 +147,9 @@ final class SettingsStore: ObservableObject {
     }
 
     func setEnabled(_ enabled: Bool, provider: ProviderDescriptor) {
+        guard !isBusy else { return }
+        isBusy = true
         Task {
-            isBusy = true
             defer { isBusy = false }
             do {
                 try await client.setProvider(provider.id, enabled: enabled)
@@ -172,9 +181,11 @@ final class SettingsStore: ObservableObject {
         enterpriseHost = ""
         workspaceID = ""
         region = ""
+        revealAPIKey = false
     }
 
     func saveAndVerifyAPIKey() {
+        guard !isBusy else { return }
         guard let provider = selectedProvider,
               let profile = selectedAuthenticationProfile
         else {
@@ -193,13 +204,13 @@ final class SettingsStore: ObservableObject {
             workspaceID: workspaceID.trimmingCharacters(in: .whitespacesAndNewlines),
             region: region.trimmingCharacters(in: .whitespacesAndNewlines))
 
+        isBusy = true
         Task {
-            isBusy = true
             defer { isBusy = false }
 
             let receipt: CredentialSaveReceipt
             do {
-                status = "Saving \(provider.name) configuration…"
+                status = "Saving and verifying \(provider.name)…"
                 receipt = try await client.saveCredential(
                     input,
                     provider: provider.id,
@@ -212,26 +223,17 @@ final class SettingsStore: ObservableObject {
             NotificationCenter.default.post(
                 name: .providerConfigurationChanged,
                 object: provider.id)
-            status = "\(receipt.summary.capitalized) in \(receipt.configURL.path). Verifying \(provider.name)…"
-
-            do {
-                let result = try await client.probeProvider(provider.id, profile: profile)
-                clearCredentialFields()
-                await reloadProviders()
-                status = result.isEmpty
-                    ? "\(provider.name) configuration saved and verified."
-                    : result
-            } catch {
-                await reloadProviders()
-                status = "\(receipt.summary.capitalized), but verification failed: \(error.localizedDescription)"
-            }
+            clearCredentialFields()
+            await reloadProviders()
+            status = "\(provider.name) configuration saved and verified in \(receipt.configURL.path)."
         }
     }
 
     func refreshBrowserSession() {
+        guard !isBusy else { return }
         guard let provider = selectedProvider else { return }
+        isBusy = true
         Task {
-            isBusy = true
             defer { isBusy = false }
             do {
                 let result = try await client.refreshBrowserSession(provider: provider.id)
@@ -244,13 +246,15 @@ final class SettingsStore: ObservableObject {
     }
 
     func clearBrowserSession() {
+        guard !isBusy else { return }
         guard let provider = selectedProvider else { return }
+        isBusy = true
         Task {
-            isBusy = true
             defer { isBusy = false }
             do {
                 let result = try await client.clearBrowserSession(provider: provider.id)
                 status = result.isEmpty ? "Browser cache cleared for \(provider.name)." : result
+                NotificationCenter.default.post(name: .providerConfigurationChanged, object: provider.id)
             } catch {
                 status = error.localizedDescription
             }
@@ -274,8 +278,9 @@ final class SettingsStore: ObservableObject {
     }
 
     func validateConfig() {
+        guard !isBusy else { return }
+        isBusy = true
         Task {
-            isBusy = true
             defer { isBusy = false }
             do { status = try await client.validateConfig() }
             catch { status = error.localizedDescription }
@@ -283,9 +288,18 @@ final class SettingsStore: ObservableObject {
     }
 
     func openLogs() {
-        let logs = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/CodexBarMonterey")
-        try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(logs)
+        let candidates = [
+            URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"),
+            URL(fileURLWithPath: "/Applications/Utilities/Console.app"),
+        ]
+        guard let console = candidates.first(where: {
+            FileManager.default.fileExists(atPath: $0.path)
+        }) else {
+            status = "Console.app could not be found."
+            return
+        }
+        NSWorkspace.shared.open(console)
+        status = "Opened Console. Search for CodexBarMonterey to view diagnostics."
     }
 
     func checkUpdates() { updater.checkForUpdates() }
@@ -345,7 +359,9 @@ private struct SettingsRootView: View {
             }
         }
         .frame(minWidth: 900, minHeight: 620)
-        .task { await store.reloadProviders() }
+        .task {
+            if !store.isBusy { await store.reloadProviders() }
+        }
     }
 }
 
@@ -381,6 +397,7 @@ private struct ProviderSettingsView: View {
         HStack(spacing: 0) {
             providerList
                 .frame(width: 340)
+                .disabled(store.isBusy)
             Divider()
             configurationPane
         }
@@ -490,6 +507,7 @@ private struct ProviderSettingsView: View {
                                         .keyboardShortcut(.defaultAction)
                                         .disabled(!store.canSaveSelectedConfiguration || store.isBusy)
                                     Button("Clear fields", action: store.clearAPIKeyField)
+                                        .disabled(store.isBusy)
                                     Spacer()
                                 }
                             } else {
@@ -499,6 +517,7 @@ private struct ProviderSettingsView: View {
                         }
                         .padding(10)
                     }
+                    .disabled(store.isBusy)
 
                     GroupBox(label: Text("Provider tools").font(.headline)) {
                         HStack(spacing: 10) {
@@ -510,6 +529,7 @@ private struct ProviderSettingsView: View {
                             Spacer()
                         }
                         .padding(10)
+                        .disabled(store.isBusy)
                     }
 
                     GroupBox(label: Text("Status").font(.headline)) {
@@ -574,7 +594,7 @@ private struct AdvancedSettingsView: View {
             Button("Check for updates", action: store.checkUpdates)
             Button("Validate provider configuration", action: store.validateConfig)
             Button("Open config file", action: store.openConfig)
-            Button("Open logs folder", action: store.openLogs)
+            Button("Open Console logs", action: store.openLogs)
             GroupBox(label: Text("Command output")) {
                 ScrollView {
                     Text(store.status)

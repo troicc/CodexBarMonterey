@@ -13,26 +13,22 @@ final class DetailsWindowController: NSWindowController {
             backing: .buffered,
             defer: false)
         window.title = "CodexBar Provider Details"
-        window.center()
+        let frameName = "CodexBarMonterey.AllProvidersWindow"
+        if !window.setFrameUsingName(frameName) { window.center() }
+        window.setFrameAutosaveName(frameName)
         window.isReleasedWhenClosed = false
         super.init(window: window)
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func showUsage(provider: String?, displayName: String?) {
+    func show() {
         guard let window = window else { return }
-        window.title = displayName.map { "\($0) — Full Usage Details" } ?? "All Enabled Providers — Full Usage Details"
+        window.title = "All Enabled Providers — Full Usage Details"
         window.contentViewController = NSHostingController(
-            rootView: AllProvidersDashboardView(store: store, selectedProvider: provider))
+            rootView: AllProvidersDashboardView(store: store))
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    func showCost(provider: String?, displayName: String?) {
-        // The graphical dashboard now merges quota, spend, token, and request
-        // histories into one original-style view instead of exposing raw CLI text.
-        showUsage(provider: provider, displayName: displayName)
     }
 }

@@ -18,6 +18,11 @@ let package = Package(
             ],
             path: "Sources/CodexBarMonterey"
         ),
+        .testTarget(
+            name: "CodexBarMontereyTests",
+            dependencies: ["CodexBarMonterey"],
+            path: "Tests/CodexBarMontereyTests"
+        ),
     ],
     swiftLanguageModes: [.v5]
 )

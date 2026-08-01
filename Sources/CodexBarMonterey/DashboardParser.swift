@@ -258,6 +258,7 @@ enum DashboardParser {
         return ProviderDashboard(
             id: snapshot.provider,
             title: snapshot.displayName,
+            accountLabel: snapshot.accountDisplayName,
             source: snapshot.source,
             updatedText: updatedText,
             metrics: Array(metrics.prefix(4)),
@@ -304,6 +305,7 @@ enum DashboardParser {
         let last30DaysSpend: Double
         let coverageStartedAt: Date?
         let adjustmentIntervals: Int
+        let unattributedIntervals: Int
         let history: [DashboardHistoryPoint]
     }
 
@@ -354,12 +356,14 @@ enum DashboardParser {
         let coverage = firstString(normalized, keys: ["coveragestartedat"])
             .flatMap(isoDate)
         let adjustments = Int(firstNumber(normalized, keys: ["adjustmentintervals"]) ?? 0)
+        let unattributed = Int(firstNumber(normalized, keys: ["unattributedintervals"]) ?? 0)
         return LocalSpendPayload(
             currencyCode: currency,
             todaySpend: today,
             last30DaysSpend: last30Days,
             coverageStartedAt: coverage,
             adjustmentIntervals: adjustments,
+            unattributedIntervals: unattributed,
             history: Array(history.suffix(180)))
     }
 
@@ -803,6 +807,11 @@ enum DashboardParser {
             subtitle += " · \(payload.adjustmentIntervals) adjustment interval"
             if payload.adjustmentIntervals != 1 { subtitle += "s" }
             subtitle += " excluded"
+        }
+        if payload.unattributedIntervals > 0 {
+            subtitle += " · \(payload.unattributedIntervals) uncertain interval"
+            if payload.unattributedIntervals != 1 { subtitle += "s" }
+            subtitle += " unassigned"
         }
         metrics.append(DashboardMetric(
             id: "today-spend-estimate",

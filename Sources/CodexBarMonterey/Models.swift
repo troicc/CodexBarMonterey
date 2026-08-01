@@ -55,8 +55,48 @@ struct ProviderSnapshot: Decodable, Hashable, Identifiable {
     }
 
     var id: String {
-        let identity = usage?.identity?.accountEmail ?? account ?? "default"
-        return "\(provider)::\(identity)"
+        let providerComponent = provider.lowercased()
+        let accountComponent = accountName?.lowercased() ?? "default"
+        if let organization = accountOrganizationName {
+            return "\(providerComponent)::\(accountComponent)::\(organization.lowercased())"
+        }
+        return "\(providerComponent)::\(accountComponent)"
+    }
+
+    var accountDisplayName: String? {
+        switch (accountName, accountOrganizationName) {
+        case let (account?, organization?) where account.caseInsensitiveCompare(organization) != .orderedSame:
+            return "\(account) · \(organization)"
+        case let (account?, _):
+            return account
+        case let (_, organization?):
+            return organization
+        default:
+            return nil
+        }
+    }
+
+    private var accountName: String? {
+        Self.firstNonEmpty([
+            usage?.identity?.accountEmail,
+            usage?.accountEmail,
+            account,
+        ])
+    }
+
+    private var accountOrganizationName: String? {
+        Self.firstNonEmpty([
+            usage?.identity?.accountOrganization,
+            usage?.accountOrganization,
+        ])
+    }
+
+    private static func firstNonEmpty(_ values: [String?]) -> String? {
+        for value in values {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
     }
 
     var displayName: String {
@@ -72,6 +112,17 @@ struct ProviderSnapshot: Decodable, Hashable, Identifiable {
     }
 
     var isFailed: Bool { error != nil }
+}
+
+enum StableIdentifier {
+    static func hash(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(format: "%016llx", hash)
+    }
 }
 
 struct ProviderStatus: Decodable, Hashable {

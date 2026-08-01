@@ -14,7 +14,9 @@
 - 浏览器 Cookie 刷新和缓存清理入口；刷新失败时由上游保证不覆盖原有有效缓存。
 - 合并菜单栏图标或每 provider 独立图标。
 - Session/weekly/extra quota、重置时间、credits、状态、账号、套餐和错误信息。
-- 上游原生文本详情页，展示无法塞进通用 quota 模型的 provider 特有字段。
+- 紧凑的图形化 provider 总览与详情页；数据仍来自上游 CLI JSON，原始输出可直接通过内置 helper 查询。
+- macOS 原生应用菜单、右键菜单、真实的 ⌘R / ⌘, / ⌘Q、滚动详情和 VoiceOver 描述。
+- 账户隔离的本地 quota/余额差历史；无法可靠归属的长间隔不会冒充当天消费。
 - Claude、Codex、Cursor 等上游支持的 cost 详情。
 - Sparkle 2.9.4 整包自动更新：AppKit shell、`CodexBarCLI`、Sparkle.framework 同步替换，不会出现 UI 与 provider 引擎版本错配。
 - Universal 2：Intel 与 Apple Silicon。
@@ -23,7 +25,7 @@
 
 ### 不伪装成已经完全复刻
 
-- 原版 SwiftUI 设置页、动态图表、hover 细节、confetti 和每个 provider 的专属登录视图没有逐像素搬运。
+- 原版 SwiftUI 设置页、confetti、全部专属动画和每个 provider 的专属登录视图没有逐像素搬运。
 - WidgetKit 桌面小组件不移植；它属于新系统 target，不是 macOS 12 可实现的同等功能。
 - 某些 provider 的复杂账户管理或设备流仍需按上游文档在相应 CLI、浏览器或配置文件中完成。数据抓取能力保留，但并非所有专属登录 UI 都在这个 AppKit shell 内重做。
 
@@ -44,7 +46,7 @@ CodexBar Monterey.app
 CodexBarCLI --format json --json-only --status
 ```
 
-这只查询配置中已启用的 provider。不会用 `--provider all` 强行同时访问几十个未配置服务。详情页使用上游文本 formatter，provider 特有余额、activity、路由统计、额外窗口等不会因为通用 JSON 卡片而消失。
+这只查询配置中已启用的 provider，不会用 `--provider all` 强行同时访问几十个未配置服务。App 使用容错 parser 生成图形化 dashboard；如需查看尚未映射到卡片的原始 provider 字段，可直接运行内置 `CodexBarCLI`。
 
 ## 最快落地：用 GitHub Actions 构建
 
@@ -115,11 +117,13 @@ CodexBar-Monterey.zip
 
 解压并把 `CodexBar Monterey.app` 放入 `/Applications`。首次打开 ad-hoc 构建时，可能需要在 Finder 中右键 → Open；正式 Developer ID + notarized 版本没有这类自签名摩擦。
 
-### 5. 发布第一条自动更新
+### 5. 发布自动更新
+
+在 `main` 上准备好发布提交后，推送一个未使用过的语义版本 tag（例如 `v0.7.0`）。release workflow 会拒绝不属于 `origin/main` 的 tag：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag -a v0.7.0 -m "CodexBar Monterey 0.7.0"
+git push origin v0.7.0
 ```
 
 `release.yml` 会自动：
@@ -133,11 +137,11 @@ git push origin v0.1.0
 7. 验证 appcast 中存在 EdDSA 签名；
 8. 自动把 `appcast.xml` 提交到 `main`。
 
-以后每次发布只需要提高版本并推送新 tag，例如：
+以后每次发布只需要在 `main` 的目标提交上提高版本并推送新 tag，例如：
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+git tag -a v0.7.1 -m "CodexBar Monterey 0.7.1"
+git push origin v0.7.1
 ```
 
 应用会按 `SUFeedURL` 自动检查、后台下载并安装完整新 bundle。
@@ -147,7 +151,7 @@ git push origin v0.1.1
 打开菜单栏 → **Settings → Providers**：
 
 - 勾选或取消任意 provider；
-- `Set API key…` 通过 stdin 调用上游 `config set-api-key`，不把 key 放进命令行参数；
+- `Save & Verify` 以 `0600` 权限原子写入上游配置，再执行结构校验和 provider 实际探测；任一步失败都会恢复原配置；
 - `Refresh browser session…` 调用上游 Cookie importer，并允许用户主动确认 Keychain 提示；
 - `Clear browser cache` 只清理选定 provider 的缓存；
 - `Open config file` 打开上游共用配置；
@@ -160,7 +164,7 @@ git push origin v0.1.1
 ~/.codexbar/config.json   # 旧安装兼容
 ```
 
-复杂字段，例如 base URL、workspace、organization、AWS、token accounts、manual cookies，继续使用上游 config schema。可在内置 helper 上直接运行上游 CLI：
+常用的 base URL、workspace、region、token account 和 manual cookie 可在设置中配置；更复杂的 organization/AWS 等字段继续使用上游 config schema。也可在内置 helper 上直接运行上游 CLI：
 
 ```bash
 HELPER="/Applications/CodexBar Monterey.app/Contents/Helpers/CodexBarCLI"
@@ -199,9 +203,21 @@ Patches/Commander.patch
 
 如果未来上游在 Core/CLI 中引入 macOS 13/14-only API，CI 会直接失败；修复应写进对应版本化 patch，而不是静默发布坏包。
 
+本地增量构建会对 `ENGINE_VERSION`、fetch/patch 脚本和所有兼容 patch 计算指纹。任一输入变化时会重新获取 vendor tree；即使已有 `build/engine/<arch>/CodexBarCLI`，打包也会重新走 Swift 的增量构建并复制当前引擎，避免 UI 与 helper 版本错配。
+
 ## 本地构建
 
-本地构建需要新版本 Xcode/Swift 6.2，但目标产物仍是 macOS 12：
+完整 App 构建需要新版本 Xcode/Swift 6.2，但目标产物仍是 macOS 12。本机只有 Swift 5.6 时，可把 GitHub Actions 作为正式构建门禁，并先运行不依赖 SwiftPM 6.2 manifest 的轻量回归：
+
+```bash
+python3 Scripts/test_monterey_patcher.py
+python3 Scripts/test_ui_contract.py
+python3 Scripts/test_release_contract.py
+Scripts/test_cost_history_parser.sh
+Scripts/test_provider_auth.sh
+```
+
+使用 Swift 6.2 的完整本地构建：
 
 ```bash
 cp Config/build.env.example Config/build.env
@@ -225,7 +241,7 @@ Scripts/smoke_test_app.sh "/Applications/CodexBar Monterey.app"
 
 - `LSMinimumSystemVersion`；
 - app 内全部 Mach-O 的 `minos`；
-- Intel/Apple Silicon 架构；
+- app 内每个 Mach-O 都同时包含 Intel/Apple Silicon 架构；
 - code signature；
 - helper 版本；
 - provider registry；
@@ -254,7 +270,7 @@ Scripts/smoke_test_app.sh "/Applications/CodexBar Monterey.app"
 - 递归合并整个 app bundle 内的 Mach-O；
 - release 的 EdDSA appcast、Developer ID、notarization 与 stapling 链路。
 
-当前执行环境不是 macOS，因此不能在这里链接 AppKit/Sparkle，也不能冒充已经在 Monterey 真机运行。最终发布门槛是：GitHub macOS build workflow 通过，并在 macOS 12 Intel 与 Apple Silicon 上运行 `smoke_test_app.sh` 和上述认证测试。
+最终发布门槛是：GitHub macOS build workflow（Swift 6.2）通过，并在 macOS 12 Intel 与 Apple Silicon 上运行 `smoke_test_app.sh` 和上述认证测试。本机 Swift 5.6 的轻量回归通过不能替代完整 SwiftPM/Sparkle 构建。
 
 ## Monterey 源码兼容层
 

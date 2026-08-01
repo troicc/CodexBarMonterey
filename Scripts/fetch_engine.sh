@@ -67,6 +67,8 @@ clone_tag \
   "$VENDOR/Commander"
 
 python3 "$ROOT/Scripts/patch_upstream.py" "$VENDOR/CodexBar"
+printf '%s\n' "$VERSION" > "$VENDOR/.engine-version"
+python3 "$ROOT/Scripts/engine_source_fingerprint.py" > "$VENDOR/.source-fingerprint"
 
 # Force the upstream package to use the patched local cookie library.
 export CODEXBAR_USE_LOCAL_SWEETCOOKIEKIT=1

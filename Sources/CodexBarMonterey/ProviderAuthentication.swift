@@ -276,21 +276,4 @@ struct ProviderCredentialInput: Hashable {
 
 struct CredentialSaveReceipt: Hashable {
     let configURL: URL
-    let storage: ProviderCredentialStorage
-    let providerID: String
-
-    var summary: String {
-        switch storage {
-        case .apiKey:
-            return "API key saved"
-        case .tokenAccount:
-            return "token account saved"
-        case .manualCookie:
-            return "manual session saved"
-        case .providerFields:
-            return "provider settings saved"
-        case .external:
-            return "provider configuration unchanged"
-        }
-    }
 }

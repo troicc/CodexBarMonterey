@@ -6,6 +6,8 @@ actor CLIClient {
         case launchFailed(String)
         case commandFailed(Int32, String)
         case invalidJSON(String)
+        case configurationRejected(String)
+        case rollbackFailed(operation: String, rollback: String)
 
         var errorDescription: String? {
             switch self {
@@ -17,6 +19,10 @@ actor CLIClient {
                 return "CodexBarCLI exited with code \(code): \(message)"
             case let .invalidJSON(message):
                 return "CodexBarCLI returned invalid JSON: \(message)"
+            case let .configurationRejected(message):
+                return "Configuration was not applied; the previous configuration was restored: \(message)"
+            case let .rollbackFailed(operation, rollback):
+                return "Configuration update failed (\(operation)) and the previous configuration could not be restored (\(rollback))."
             }
         }
     }
@@ -60,27 +66,6 @@ actor CLIClient {
             throw error
         }
     }
-
-    /// Uses upstream's own provider-specific text renderer. This preserves details that do
-    /// not fit the shared UsageSnapshot shape (balances, routing stats, activity, etc.).
-    func detailedText(provider: String? = nil) async throws -> String {
-        var arguments = ["--no-color", "--status"]
-        if let provider { arguments += ["--provider", provider] }
-        let result = try await run(arguments: arguments, timeout: 120, acceptNonZero: true)
-        let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { return text }
-        throw ClientError.commandFailed(result.status, result.stderr)
-    }
-
-    func costText(provider: String? = nil) async throws -> String {
-        var arguments = ["cost", "--no-color"]
-        if let provider { arguments += ["--provider", provider] }
-        let result = try await run(arguments: arguments, timeout: 180, acceptNonZero: true)
-        let text = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { return text }
-        throw ClientError.commandFailed(result.status, result.stderr)
-    }
-
 
     /// Returns provider-specific usage/cost JSON for the graphical dashboard.
     /// Some providers expose their history in the usage payload, while local
@@ -133,14 +118,29 @@ actor CLIClient {
         provider: String,
         profile: ProviderAuthenticationProfile
     ) async throws -> CredentialSaveReceipt {
-        let receipt = try configStore.save(
-            providerID: provider,
-            profile: profile,
-            input: input)
-        _ = try await run(
-            arguments: ["config", "validate", "--format", "json", "--pretty"],
-            timeout: 30)
-        return receipt
+        let backup = try configStore.makeBackup()
+        do {
+            let receipt = try configStore.save(
+                providerID: provider,
+                profile: profile,
+                input: input)
+            _ = try await run(
+                arguments: ["config", "validate", "--format", "json", "--pretty"],
+                timeout: 30)
+            _ = try await probeProvider(provider, profile: profile)
+            return receipt
+        } catch {
+            do {
+                try configStore.restore(backup)
+            } catch let rollbackError {
+                NSLog("Provider configuration rollback failed for %@", provider)
+                throw ClientError.rollbackFailed(
+                    operation: error.localizedDescription,
+                    rollback: rollbackError.localizedDescription)
+            }
+            NSLog("Provider configuration update rejected for %@; restored previous configuration", provider)
+            throw ClientError.configurationRejected(error.localizedDescription)
+        }
     }
 
     func probeProvider(
@@ -184,7 +184,6 @@ actor CLIClient {
 
     private func run(
         arguments: [String],
-        stdin: String? = nil,
         timeout: TimeInterval,
         acceptNonZero: Bool = false,
         includeLiveUsage: Bool = false
@@ -231,13 +230,6 @@ actor CLIClient {
             }
             process.standardOutput = outputHandle
             process.standardError = errorHandle
-
-            if let stdin {
-                let inputPipe = Pipe()
-                process.standardInput = inputPipe
-                inputPipe.fileHandleForWriting.write(Data(stdin.utf8))
-                inputPipe.fileHandleForWriting.closeFile()
-            }
 
             let completionGate = CompletionGate()
             let finish: @Sendable (Result<CommandResult, Error>) -> Void = { result in

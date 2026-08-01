@@ -26,6 +26,11 @@ enum CodexBarConfigStoreError: LocalizedError {
     }
 }
 
+struct CodexBarConfigBackup {
+    fileprivate let url: URL
+    fileprivate let contents: Data?
+}
+
 final class CodexBarConfigStore {
     private let environment: [String: String]
     private let homeDirectory: URL
@@ -76,6 +81,28 @@ final class CodexBarConfigStore {
             try write(root: root, to: url)
         }
         return url
+    }
+
+    func makeBackup() throws -> CodexBarConfigBackup {
+        let url = try resolvedConfigURL()
+        let contents = fileManager.fileExists(atPath: url.path)
+            ? try Data(contentsOf: url)
+            : nil
+        return CodexBarConfigBackup(url: url, contents: contents)
+    }
+
+    func restore(_ backup: CodexBarConfigBackup) throws {
+        if let contents = backup.contents {
+            try fileManager.createDirectory(
+                at: backup.url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try contents.write(to: backup.url, options: .atomic)
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: backup.url.path)
+        } else if fileManager.fileExists(atPath: backup.url.path) {
+            try fileManager.removeItem(at: backup.url)
+        }
     }
 
     func save(
@@ -145,10 +172,7 @@ final class CodexBarConfigStore {
         root["providers"] = providers
         try write(root: root, to: url)
 
-        return CredentialSaveReceipt(
-            configURL: url,
-            storage: profile.storage,
-            providerID: providerID)
+        return CredentialSaveReceipt(configURL: url)
     }
 
     private func applyOptionalFields(

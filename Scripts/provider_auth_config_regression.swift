@@ -125,4 +125,35 @@ expect(ProviderAuthenticationCatalog.uncoveredStableProviderIDs.isEmpty,
 expect(ProviderAuthenticationCatalog.profiles.count == ProviderAuthenticationCatalog.stableProviderIDs.count,
        "Authentication profile count does not match provider count")
 
+// Save-and-verify uses this backup to roll back invalid credentials. Restoring
+// must preserve unknown upstream fields as well as the previous credential.
+let backup = try store.makeBackup()
+_ = try store.save(
+    providerID: "openrouter",
+    profile: openrouter,
+    input: input(secret: "replacement-that-must-roll-back"))
+try store.restore(backup)
+let restoredData = try Data(contentsOf: configURL)
+guard let restoredRoot = try JSONSerialization.jsonObject(with: restoredData) as? [String: Any],
+      let restoredProviders = restoredRoot["providers"] as? [[String: Any]],
+      let restoredOpenRouter = restoredProviders.first(where: { ($0["id"] as? String) == "openrouter" })
+else { fail("Could not decode restored config") }
+expect(restoredOpenRouter["apiKey"] as? String == "sk-or-test", "Backup did not restore the previous API key")
+expect(restoredRoot["unknownRoot"] as? String == "preserve-me", "Backup lost unknown root fields")
+
+// If save created a brand-new config, rollback should remove it instead of
+// leaving an unverified credential behind.
+let newConfigURL = temp.appendingPathComponent("new-config.json")
+let newStore = CodexBarConfigStore(
+    environment: ["CODEXBAR_CONFIG": newConfigURL.path],
+    homeDirectory: temp)
+let absentBackup = try newStore.makeBackup()
+_ = try newStore.save(
+    providerID: "openrouter",
+    profile: openrouter,
+    input: input(secret: "temporary-key"))
+expect(FileManager.default.fileExists(atPath: newConfigURL.path), "Test config was not created")
+try newStore.restore(absentBackup)
+expect(!FileManager.default.fileExists(atPath: newConfigURL.path), "Rollback did not remove a newly created config")
+
 print("All-provider authentication/config regression tests passed.")

@@ -9,17 +9,20 @@ final class DashboardStore: ObservableObject {
     @Published var selectedProviderID: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
+    @Published private(set) var lastSuccessfulRefresh: Date?
 
-    let client: CLIClient
+    private let client: CLIClient
     var onOpenSettings: (() -> Void)?
     var onOpenAllDetails: (() -> Void)?
     var onOpenProviderDetails: ((String) -> Void)?
-    var onCheckUpdates: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onRefreshStateChanged: (() -> Void)?
 
-    private var loadingProviders: Set<String> = []
+    private var loadingProviders: [String: Int] = [:]
     private var supplementalJSONBySnapshot: [String: String] = [:]
     private var supplementalJSONByProvider: [String: String] = [:]
+    private var refreshPending = false
+    private var snapshotGeneration = 0
     private let quotaTrendStore = LocalQuotaTrendStore()
     private let spendHistoryStore = LocalSpendHistoryStore()
 
@@ -33,16 +36,42 @@ final class DashboardStore: ObservableObject {
 
     var selectedDashboard: ProviderDashboard? {
         guard let snapshot = selectedSnapshot else { return nil }
-        return dashboards[snapshot.id] ?? dashboards[snapshot.provider]
+        return dashboards[snapshot.id]
     }
     func refresh() async {
-        guard !isRefreshing else { return }
+        if isRefreshing {
+            refreshPending = true
+            return
+        }
         isRefreshing = true
-        lastError = nil
+        onRefreshStateChanged?()
+        repeat {
+            refreshPending = false
+            await performRefresh()
+        } while refreshPending
+        isRefreshing = false
+        onRefreshStateChanged?()
+    }
+
+    private func performRefresh() async {
         do {
             let loaded = try await client.fetchEnabled(status: true)
-            snapshots = loaded.sorted {
-                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            snapshots = loaded.sorted { left, right in
+                let providerOrder = left.displayName.localizedCaseInsensitiveCompare(right.displayName)
+                if providerOrder != .orderedSame { return providerOrder == .orderedAscending }
+                let accountOrder = (left.accountDisplayName ?? "")
+                    .localizedCaseInsensitiveCompare(right.accountDisplayName ?? "")
+                if accountOrder != .orderedSame { return accountOrder == .orderedAscending }
+                return left.id < right.id
+            }
+            snapshotGeneration &+= 1
+            let currentSnapshotIDs = Set(snapshots.map(\.id))
+            let currentProviderIDs = Set(snapshots.map(\.provider))
+            supplementalJSONBySnapshot = supplementalJSONBySnapshot.filter {
+                currentSnapshotIDs.contains($0.key)
+            }
+            supplementalJSONByProvider = supplementalJSONByProvider.filter {
+                currentProviderIDs.contains($0.key)
             }
             var rebuilt: [String: ProviderDashboard] = [:]
             for snapshot in snapshots {
@@ -59,7 +88,6 @@ final class DashboardStore: ObservableObject {
                     snapshot: snapshot,
                     supplementalJSON: combinedSupplement)
                 rebuilt[snapshot.id] = dashboard
-                if rebuilt[snapshot.provider] == nil { rebuilt[snapshot.provider] = dashboard }
             }
             dashboards = rebuilt
             if let selectedProviderID = selectedProviderID,
@@ -72,10 +100,13 @@ final class DashboardStore: ObservableObject {
             if let snapshot = selectedSnapshot {
                 await enrichDashboard(for: snapshot)
             }
+            lastError = nil
+            lastSuccessfulRefresh = Date()
         } catch {
             lastError = error.localizedDescription
+            NSLog("Dashboard refresh failed: %@", error.localizedDescription)
         }
-        isRefreshing = false
+        onRefreshStateChanged?()
     }
     func select(_ snapshot: ProviderSnapshot) {
         selectedProviderID = snapshot.id
@@ -94,15 +125,35 @@ final class DashboardStore: ObservableObject {
     func enrich(_ snapshot: ProviderSnapshot) async {
         await enrichDashboard(for: snapshot)
     }
-    private func enrichDashboard(for snapshot: ProviderSnapshot) async {
-        let key = snapshot.id
-        guard !loadingProviders.contains(key) else { return }
-        loadingProviders.insert(key)
-        defer { loadingProviders.remove(key) }
-        let fetchedSupplement = await client.dashboardSupplementJSON(provider: snapshot.provider)
+    private func enrichDashboard(for requestedSnapshot: ProviderSnapshot) async {
+        let key = requestedSnapshot.id
+        let generation = snapshotGeneration
+        guard let snapshot = snapshots.first(where: { $0.id == key }),
+              loadingProviders[key] != generation
+        else { return }
+        loadingProviders[key] = generation
+        defer {
+            if loadingProviders[key] == generation { loadingProviders[key] = nil }
+        }
+        let providerAccountCount = snapshots.filter { $0.provider == snapshot.provider }.count
+        // The upstream cost command accepts a provider ID but no account ID.
+        // Showing that aggregate under every account would be misleading, so
+        // suppress provider-level enrichment when multiple accounts are visible.
+        let fetchedSupplement: String?
+        if providerAccountCount <= 1 {
+            fetchedSupplement = await client.dashboardSupplementJSON(provider: snapshot.provider)
+        } else {
+            fetchedSupplement = nil
+        }
+        guard generation == snapshotGeneration,
+              snapshots.contains(where: { $0.id == key })
+        else { return }
         if let fetchedSupplement = fetchedSupplement {
             supplementalJSONBySnapshot[key] = fetchedSupplement
             supplementalJSONByProvider[snapshot.provider] = fetchedSupplement
+        } else if providerAccountCount > 1 {
+            supplementalJSONBySnapshot[key] = nil
+            supplementalJSONByProvider[snapshot.provider] = nil
         }
         let cachedSupplement = fetchedSupplement ?? cachedSupplement(for: snapshot)
         let localQuota = quotaTrendStore.record(snapshot: snapshot)
@@ -117,10 +168,9 @@ final class DashboardStore: ObservableObject {
             snapshot: snapshot,
             supplementalJSON: resolvedSupplement)
         dashboards[key] = dashboard
-        dashboards[snapshot.provider] = dashboard
     }
     func dashboard(for snapshot: ProviderSnapshot) -> ProviderDashboard {
-        dashboards[snapshot.id] ?? dashboards[snapshot.provider] ?? DashboardParser.dashboard(snapshot: snapshot)
+        dashboards[snapshot.id] ?? DashboardParser.dashboard(snapshot: snapshot)
     }
 
     func openDashboardURL() {
@@ -132,19 +182,13 @@ final class DashboardStore: ObservableObject {
         guard let url = selectedDashboard?.statusURL else { return }
         NSWorkspace.shared.open(url)
     }
-    func copySelectedJSON() {
-        guard let json = selectedSnapshot?.rawJSON else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(json, forType: .string)
-    }
-
     private func cachedSupplement(for snapshot: ProviderSnapshot) -> String? {
-        if let exact = supplementalJSONBySnapshot[snapshot.id] { return exact }
         // Provider-level fallback is safe only when that provider has a single
         // account. This prevents one account's supplemental history from being
         // displayed under another account with the same provider ID.
         let accountCount = snapshots.filter { $0.provider == snapshot.provider }.count
         guard accountCount <= 1 else { return nil }
+        if let exact = supplementalJSONBySnapshot[snapshot.id] { return exact }
         return supplementalJSONByProvider[snapshot.provider]
     }
 

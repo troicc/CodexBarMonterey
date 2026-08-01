@@ -1,6 +1,6 @@
 import Foundation
 
-/// Persists a small, privacy-safe history of the z.ai five-hour quota window.
+/// Persists a small, account-isolated history of the z.ai five-hour quota window.
 /// The upstream API exposes current quota windows but no dated history array,
 /// so the Monterey UI samples the 300-minute window locally. MCP/monthly quota
 /// windows are intentionally excluded from this trend.
@@ -11,7 +11,8 @@ final class LocalQuotaTrendStore {
     }
 
     private let fileURL: URL
-    private var samplesByProvider: [String: [Sample]]
+    private let fileManager: FileManager
+    private var samplesByAccount: [String: [Sample]]
 
     init(fileManager: FileManager = .default, storageDirectory: URL? = nil) {
         let directory: URL
@@ -23,8 +24,10 @@ final class LocalQuotaTrendStore {
             directory = cacheRoot.appendingPathComponent("CodexBarMonterey", isDirectory: true)
         }
         try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        self.fileURL = directory.appendingPathComponent("zai-five-hour-trend-v2.json")
-        self.samplesByProvider = Self.load(from: self.fileURL)
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        self.fileManager = fileManager
+        self.fileURL = directory.appendingPathComponent("zai-five-hour-trend-v3.json")
+        self.samplesByAccount = Self.load(from: self.fileURL)
     }
 
     /// Records one sample and returns synthetic provider JSON understood by the
@@ -39,15 +42,29 @@ final class LocalQuotaTrendStore {
 
         let clamped = max(0, min(100, usedPercent))
         let cutoff = now.addingTimeInterval(-30 * 24 * 60 * 60)
-        var samples = (samplesByProvider[snapshot.provider] ?? []).filter { $0.timestamp >= cutoff }
+        let accountKey = Self.storageKey(for: snapshot)
+        for key in Array(samplesByAccount.keys) {
+            let retained = (samplesByAccount[key] ?? [])
+                .filter { $0.timestamp >= cutoff }
+                .sorted { $0.timestamp < $1.timestamp }
+            samplesByAccount[key] = retained.isEmpty ? nil : Array(retained.suffix(240))
+        }
+        var samples = samplesByAccount[accountKey] ?? []
 
-        if let last = samples.last, now.timeIntervalSince(last.timestamp) < 5 * 60 {
-            samples[samples.count - 1] = Sample(timestamp: now, usedPercent: clamped)
+        if let last = samples.last {
+            let interval = now.timeIntervalSince(last.timestamp)
+            if interval > 0, interval < 5 * 60 {
+                samples[samples.count - 1] = Sample(timestamp: now, usedPercent: clamped)
+            } else if interval >= 5 * 60 {
+                samples.append(Sample(timestamp: now, usedPercent: clamped))
+            }
+            // Ignore duplicate/out-of-order timestamps so a clock adjustment
+            // cannot move the end of the persisted series backwards.
         } else {
             samples.append(Sample(timestamp: now, usedPercent: clamped))
         }
         samples = Array(samples.suffix(240))
-        samplesByProvider[snapshot.provider] = samples
+        samplesByAccount[accountKey] = samples
         save()
 
         let formatter = DateFormatter()
@@ -98,8 +115,20 @@ final class LocalQuotaTrendStore {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(samplesByProvider) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+        guard let data = try? encoder.encode(samplesByAccount) else { return }
+        do {
+            let directory = fileURL.deletingLastPathComponent()
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+            try data.write(to: fileURL, options: .atomic)
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        } catch {
+            // Quota history is an optional cache and must never break refresh.
+        }
+    }
+
+    private static func storageKey(for snapshot: ProviderSnapshot) -> String {
+        "\(snapshot.provider)::\(StableIdentifier.hash(snapshot.id))"
     }
 
     private static func load(from url: URL) -> [String: [Sample]] {

@@ -30,6 +30,7 @@ jobs:
           python3 Scripts/test_monterey_patcher.py
           python3 Scripts/test_smoke_contract.py
           python3 Scripts/test_ui_contract.py
+          python3 Scripts/test_release_contract.py
           Scripts/test_cost_history_parser.sh
           Scripts/test_provider_auth.sh
           python3 Scripts/validate_provider_auth_catalog.py
@@ -48,6 +49,8 @@ jobs:
           sed -i '' "s|com.yourname.codexbar.monterey|$BUNDLE_ID_VALUE|" Config/build.env
           sed -i '' "s|PASTE_GENERATE_KEYS_PUBLIC_KEY_HERE|$PUBLIC_KEY_VALUE|" Config/build.env
           sed -i '' "s|YOUR_GITHUB_USER/YOUR_REPO|${{ github.repository }}|" Config/build.env
+      - name: Run Swift package tests
+        run: swift test -c release
       - name: Preflight menu app target
         run: |
           export MACOSX_DEPLOYMENT_TARGET=12.0

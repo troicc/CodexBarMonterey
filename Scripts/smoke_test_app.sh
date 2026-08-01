@@ -21,10 +21,18 @@ echo "== Bundle =="
 codesign --verify --deep --strict --verbose=2 "$APP"
 
 echo "== Architectures =="
-for binary in "$MAIN" "$HELPER"; do
-  printf '%s: ' "$binary"
-  lipo -archs "$binary"
-done
+mach_o_count=0
+while IFS= read -r -d '' binary; do
+  file "$binary" | grep -q 'Mach-O' || continue
+  mach_o_count=$((mach_o_count + 1))
+  archs="$(lipo -archs "$binary")"
+  printf '%s: %s\n' "${binary#"$APP/"}" "$archs"
+  if [[ "$archs" != *arm64* || "$archs" != *x86_64* ]]; then
+    echo "Bundle contains a non-universal Mach-O component: $binary" >&2
+    exit 1
+  fi
+done < <(find "$APP" -type f -print0)
+[[ "$mach_o_count" -gt 0 ]] || { echo "Bundle contains no Mach-O files." >&2; exit 1; }
 
 echo "== Deployment targets =="
 "$SCRIPT_DIR/check_macos12_compat.sh" "$APP"

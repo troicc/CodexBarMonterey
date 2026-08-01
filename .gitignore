@@ -6,6 +6,5 @@ build/
 dist/
 releases/
 Config/build.env
-appcast.xml
 Scripts/__pycache__/
 *.pyc

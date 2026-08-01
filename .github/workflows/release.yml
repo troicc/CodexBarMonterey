@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-appcast-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: macos-26
@@ -40,6 +44,14 @@ jobs:
           echo "APP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
           echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
 
+      - name: Verify release commit is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Release tag must point to a commit contained in origin/main." >&2
+            exit 1
+          fi
+
       - name: Import Developer ID certificate when configured
         env:
           DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
@@ -58,6 +70,7 @@ jobs:
           python3 Scripts/test_monterey_patcher.py
           python3 Scripts/test_smoke_contract.py
           python3 Scripts/test_ui_contract.py
+          python3 Scripts/test_release_contract.py
           Scripts/test_cost_history_parser.sh
           Scripts/test_provider_auth.sh
           python3 Scripts/validate_provider_auth_catalog.py
@@ -87,6 +100,9 @@ jobs:
           if [[ -z "$CONFIGURED_SPARKLE_PUBLIC_KEY" ]]; then
             echo "Sparkle public key is not configured; this release can be downloaded normally, but secure automatic updates are disabled."
           fi
+
+      - name: Run Swift package tests
+        run: swift test -c release
 
       - name: Preflight menu app target
         run: |
@@ -169,17 +185,21 @@ jobs:
         if: steps.sparkle.outputs.enabled == 'true'
         run: |
           APPCAST_TMP="$(mktemp)"
+          MAIN_WORKTREE_PARENT="$(mktemp -d)"
+          MAIN_WORKTREE="$MAIN_WORKTREE_PARENT/main"
           cp appcast.xml "$APPCAST_TMP"
-          git worktree add /tmp/codexbar-monterey-main origin/main
-          cp "$APPCAST_TMP" /tmp/codexbar-monterey-main/appcast.xml
-          cd /tmp/codexbar-monterey-main
+          git fetch --no-tags origin main
+          git worktree add "$MAIN_WORKTREE" origin/main
+          cp "$APPCAST_TMP" "$MAIN_WORKTREE/appcast.xml"
+          cd "$MAIN_WORKTREE"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add appcast.xml
+          git add --force appcast.xml
           if git diff --cached --quiet; then
             echo "appcast.xml unchanged"
           else
             git commit -m "Update Sparkle appcast for ${GITHUB_REF_NAME}"
+            git pull --rebase origin main
             git push origin HEAD:main
           fi
 
