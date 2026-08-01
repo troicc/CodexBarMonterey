@@ -12,8 +12,8 @@
 | 重构基线 | bed623c — docs: add project memory and release runbook；本轮重构位于其后的提交 |
 | 工作树期望 | 本轮提交后应干净；若存在差异，不得默认属于本轮，必须重新审查 |
 | 上游引擎常量 | ENGINE_VERSION = v0.46.0 |
-| 当前正式 tag | v0.6.0 |
-| 目标发布 | 下一版本待定；不要重复创建 v0.6.0 |
+| 当前正式 tag | 本轮目标为 v0.7.0；是否已发布必须用 Git/GitHub 复核 |
+| 下一版本规则 | 小优化从 v0.7.0 递增到 v0.7.1；较大重构递增到 v0.8.0 |
 | 最低系统 | macOS 12 Monterey |
 | 架构 | Universal 2：arm64 + x86_64 |
 | UI 技术 | AppKit 菜单栏壳 + SwiftUI 内容视图 |
@@ -191,6 +191,7 @@
 - 已通过 UI、release、offline smoke contract；Monterey patcher 完成 38 项变换并通过 Core/CLI semantic regression 与 API 扫描。
 - 已通过 typed cost parser、z.ai quota、local spend、provider auth/config 和 66-provider catalog audit。
 - 已通过 Shell/Python/YAML/Swift parse、`git diff --check`，以及 Swift 5.6 + macOS 12 SDK 的 dashboard/core typecheck。
+- GitHub Actions branch run `30693628097` 已在提交 `b9ad530` 上完整成功，包含 Swift package tests、Universal build、最低系统检查、offline smoke 和 artifact upload；用户随后手动安装过该 branch artifact。该记录只是历史证据，正式安装仍应优先使用 `v0.7.0` Release 资产。
 - 本机没有执行完整 SwiftPM 6.2、Sparkle 依赖解析和双架构 bundle；GitHub Actions 中的 `swift test -c release`、preflight、Universal build、codesign/compat/offline smoke 才是最终构建门禁。
 
 ## 7. 已知风险、文档差异和不要误判的地方
@@ -234,7 +235,15 @@ swiftc -typecheck -target arm64-apple-macosx12.0 \
 
 ## 9. 下一版本 release runbook
 
-### 9.1 发布前确认
+### 9.1 项目版本规则
+
+- Git tag 永远带 `v` 前缀，例如 `v0.7.0`；应用和 GitHub Release 显示版本为 `0.7.0`。
+- 小版本优化、修复、测试或文档增强增加个位数（patch）：`0.7.0 → 0.7.1 → 0.7.2`。
+- 较大的功能或架构重构增加十位数（minor），并把个位数归零：`0.7.x → 0.8.0`。
+- 2026-08-01 这轮原生体验、多账户、数据可信度和发布链路重构命名为 `0.7.0`，对应 tag `v0.7.0`。
+- `ENGINE_VERSION` 只代表 bundled upstream provider engine，不能拿它充当 App 版本，也不能为了 App release 修改它。
+
+### 9.2 发布前确认
 
 ~~~bash
 git status --short --branch
@@ -250,23 +259,36 @@ git diff --stat origin/main...HEAD
 - 不需要把 `Config/build.env.example` 的 `APP_VERSION` 改成 release 版本；workflow 会从 tag 推导，并在 CI 临时替换 build.env；
 - 不提交真实的 Config/build.env、Sparkle 私钥或签名证书。
 
-### 9.2 推荐的 Git 操作
+### 9.3 发布型 push 必须完成的闭环
 
-准备好新的、尚未使用过的 `vX.Y.Z` 后，可用：
+用户明确要求发布时，push 分支不是终点，必须在同一轮完成并核验以下链路：
+
+1. 工作分支提交并 push；
+2. 在该分支手动触发 `build.yml`，等待 Swift tests、Universal build、macOS 12 compatibility 和 offline smoke 全部成功；
+3. 把验证过的提交合并/快进到 `main` 并 push；
+4. 在同一个 main release commit 上创建版本 tag 并 push，立即触发 `release.yml`；
+5. 等待 GitHub Release、zip 和 SHA256SUMS 完成；
+6. 下载正式 Release 资产、校验、替换 `/Applications` 中的应用并启动验证。
+
+也就是说，对于发布型交付，“push + release + download/install verification”是一项完整任务，不能像普通 WIP 分支那样只推代码就结束。若用户只明确要求保存 WIP 分支，则不要擅自 release。
+
+以 `v0.7.0` 为例：
 
 ~~~bash
 git switch main
 git pull --ff-only origin main
+git merge --ff-only codex/native-experience-refactor
 git status --short
-git tag -a vX.Y.Z -m "CodexBar Monterey X.Y.Z"
-git push origin vX.Y.Z
+git push origin main
+git tag -a v0.7.0 -m "CodexBar Monterey 0.7.0"
+git push origin v0.7.0
 ~~~
 
 如果仓库保护规则要求 PR，先合并，再在合并后的 `main` 提交上创建 tag。workflow 会直接拒绝不属于 `origin/main` 的 release tag。
 
 tag 必须以 `v` 开头并符合语义版本，例如 `v0.7.0`，不能只推 `0.7.0`。
 
-### 9.3 GitHub Actions 配置
+### 9.4 GitHub Actions 配置
 
 在仓库 Settings → Secrets and variables → Actions 配置：
 
@@ -293,7 +315,35 @@ release.yml 会生成：
 - releases/SHA256SUMS.txt
 - 配置完整 Sparkle keys 时额外生成并发布 appcast.xml，然后更新 main 上的 appcast。
 
-### 9.4 发布后验证
+### 9.5 下载、校验并替换本机应用
+
+正式安装优先使用 tag workflow 生成的 GitHub Release zip，不要把普通 branch build artifact 当作最终发布包。下载后先校验 checksum 和解压内容，再停止旧进程与删除旧 App；删除目标必须始终是完整、显式路径 `/Applications/CodexBar Monterey.app`。
+
+以 `v0.7.0` 为例：
+
+~~~bash
+INSTALL_TMP="$(mktemp -d /private/tmp/codexbar-release-XXXXXX)"
+gh release download v0.7.0 \
+  --pattern "CodexBar-Monterey-0.7.0.zip" \
+  --pattern "SHA256SUMS.txt" \
+  --dir "$INSTALL_TMP"
+
+cd "$INSTALL_TMP"
+shasum -a 256 -c SHA256SUMS.txt
+mkdir -p "$INSTALL_TMP/unpacked"
+ditto -x -k "CodexBar-Monterey-0.7.0.zip" "$INSTALL_TMP/unpacked"
+ls -ld "$INSTALL_TMP/unpacked/CodexBar Monterey.app"
+
+pkill -x CodexBarMonterey 2>/dev/null || true
+rm -rf "/Applications/CodexBar Monterey.app"
+ditto "$INSTALL_TMP/unpacked/CodexBar Monterey.app" "/Applications/CodexBar Monterey.app"
+xattr -dr com.apple.quarantine "/Applications/CodexBar Monterey.app"
+open "/Applications/CodexBar Monterey.app"
+~~~
+
+安装后检查 `/Applications/CodexBar Monterey.app/Contents/Info.plist` 的版本、codesign、arm64/x86_64 slices 和进程状态；确认新版本能打开并刷新 provider 后，临时下载目录才可删除。
+
+### 9.6 发布后验证
 
 ~~~bash
 git ls-remote --tags origin vX.Y.Z
@@ -308,7 +358,7 @@ git ls-remote --tags origin vX.Y.Z
 - 若配置 Sparkle，appcast URL、签名和升级链路可用；
 - 若 ad-hoc，明确在 release note 中说明不是 notarized build。
 
-### 9.5 常见失败处理
+### 9.7 常见失败处理
 
 - contract/test 失败：先看 Actions 失败步骤；不要跳过测试直接重发。
 - build/codesign 失败：确认 bundle 内 arm64/x86_64、Developer ID secrets 和证书密码；没有签名条件时应接受 ad-hoc 或补齐 secrets。
