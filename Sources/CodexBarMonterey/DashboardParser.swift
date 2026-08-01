@@ -14,11 +14,22 @@ enum DashboardParser {
             fromJSON: supplementalJSON)
         let deepSeek = snapshot.provider == "deepseek" ? deepSeekPayload(from: roots) : nil
         let zai = snapshot.provider == "zai" ? zaiPayload(from: roots) : nil
+        let mimo = snapshot.provider == "mimo" ? mimoPayload(from: roots) : nil
+        let localSpend = localSpendPayload(from: roots)
+        let financeObservation = ProviderFinanceObservationExtractor.observation(
+            provider: snapshot.provider,
+            rawJSON: snapshot.rawJSON,
+            supplementalJSON: supplementalJSON)
+        let financeProfile = ProviderFinanceProfile.profile(for: snapshot.provider)
         let costBackedProvider = snapshot.provider == "codex" || snapshot.provider == "claude"
-        let providerSpecific = snapshot.provider == "deepseek" || snapshot.provider == "zai"
+        let providerSpecific = snapshot.provider == "deepseek" ||
+            snapshot.provider == "zai" ||
+            snapshot.provider == "moonshot" ||
+            snapshot.provider == "mimo"
+        let genericCurrencyCode = findCurrencyCode(flattened)
 
         var metrics: [DashboardMetric] = []
-        if let deepSeek {
+        if let deepSeek = deepSeek {
             metrics.append(DashboardMetric(
                 id: "today-tokens",
                 title: "Today tokens",
@@ -44,17 +55,32 @@ enum DashboardParser {
                 currencyCode: deepSeek.currencyCode,
                 unavailableSubtitle: "DeepSeek did not return cost data")
         } else if snapshot.provider == "deepseek" {
-            if let balance = deepSeekBalanceDescription(flattened) {
-                metrics.append(DashboardMetric(id: "balance", title: "Balance", value: balance))
-            }
+            appendBalanceMetric(&metrics, observation: financeObservation)
+            appendLocalSpendMetrics(&metrics, payload: localSpend)
             metrics.append(DashboardMetric(
                 id: "deepseek-details",
                 title: "Tokens & cost",
                 value: "Platform only",
-                subtitle: "Open DeepSeek Usage to view or export monthly details"))
+                subtitle: "Official details require a DeepSeek Platform session"))
         }
 
-        if let zai {
+        if snapshot.provider == "moonshot" || snapshot.provider == "mimo" {
+            appendBalanceMetric(&metrics, observation: financeObservation)
+            appendLocalSpendMetrics(&metrics, payload: localSpend)
+            if let mimo = mimo {
+                if let tokenUsed = mimo.tokenUsed, let tokenLimit = mimo.tokenLimit, tokenLimit > 0 {
+                    metrics.append(DashboardMetric(
+                        id: "token-plan",
+                        title: "Token plan",
+                        value: "\(compact(tokenUsed) ?? decimal(tokenUsed)) / \(compact(tokenLimit) ?? decimal(tokenLimit))",
+                        subtitle: mimo.planCode))
+                } else if let plan = mimo.planCode, !plan.isEmpty {
+                    metrics.append(DashboardMetric(id: "plan", title: "Plan", value: plan))
+                }
+            }
+        }
+
+        if let zai = zai {
             metrics.append(DashboardMetric(
                 id: "today-tokens",
                 title: "Today tokens",
@@ -71,7 +97,7 @@ enum DashboardParser {
                 id: "cost",
                 title: "Cost",
                 value: "Not exposed",
-                subtitle: "z.ai has no cost summary endpoint"))
+                subtitle: "z.ai has no monetary cost summary"))
         } else if snapshot.provider == "zai" {
             metrics.append(DashboardMetric(
                 id: "hourly-tokens",
@@ -82,10 +108,10 @@ enum DashboardParser {
                 id: "cost",
                 title: "Cost",
                 value: "Not exposed",
-                subtitle: "z.ai has no cost summary endpoint"))
+                subtitle: "Quota usage cannot be converted into money"))
         }
 
-        if let costPayload {
+        if let costPayload = costPayload {
             appendMetric(
                 &metrics,
                 id: "today-tokens",
@@ -110,18 +136,25 @@ enum DashboardParser {
                 cost: costPayload.resolvedLast30DaysCostUSD)
         }
 
-        // Cost-backed and provider-specific payloads have typed aggregate fields.
-        // Do not recursively match their daily/hourly rows as aggregate metrics.
+        // Typed payloads and registered finance providers are parsed explicitly.
+        // This avoids accidentally treating daily rows, quotas, or token-plan
+        // credits as monetary aggregate fields.
         if !costBackedProvider && !providerSpecific {
-            appendMetric(&metrics, id: "today-spend", title: "Today", value: currency(findNumber(flattened, aliases: [
-                "todayspend", "todaycost", "costtoday", "dailyspend", "currentdayspend"
-            ])))
-            appendMetric(&metrics, id: "7d-spend", title: "7d spend", value: currency(findNumber(flattened, aliases: [
-                "7dspend", "sevendayspend", "weekspend", "weeklyspend", "last7daysspend"
-            ])))
-            appendMetric(&metrics, id: "30d-spend", title: "30d spend", value: currency(findNumber(flattened, aliases: [
-                "30dspend", "thirtydayspend", "monthlyspend", "periodspend", "totalspend"
-            ])))
+            appendMetric(&metrics, id: "today-spend", title: "Today", value: currency(
+                findNumber(flattened, aliases: [
+                    "todayspend", "todaycost", "costtoday", "dailyspend", "currentdayspend"
+                ]),
+                code: genericCurrencyCode))
+            appendMetric(&metrics, id: "7d-spend", title: "7d spend", value: currency(
+                findNumber(flattened, aliases: [
+                    "7dspend", "sevendayspend", "weekspend", "weeklyspend", "last7daysspend"
+                ]),
+                code: genericCurrencyCode))
+            appendMetric(&metrics, id: "30d-spend", title: "30d spend", value: currency(
+                findNumber(flattened, aliases: [
+                    "30dspend", "thirtydayspend", "monthlyspend", "periodspend", "totalspend"
+                ]),
+                code: genericCurrencyCode))
             appendMetric(&metrics, id: "today-requests", title: "Today req", value: compact(findNumber(flattened, aliases: [
                 "todayrequests", "requeststoday", "dailyrequests"
             ])))
@@ -133,7 +166,7 @@ enum DashboardParser {
             ])))
         }
 
-        let quotas = mergedQuotaLanes(snapshot: snapshot, roots: roots)
+        let quotas = mergedQuotaLanes(snapshot: snapshot, roots: roots, mimo: mimo)
         if metrics.count < 4, !providerSpecific {
             if snapshot.provider == "codex" {
                 if let remaining = snapshot.credits?.remaining,
@@ -142,9 +175,11 @@ enum DashboardParser {
                     appendMetric(&metrics, id: "credits", title: "Credits", value: decimal(remaining))
                 }
             } else {
-                appendMetric(&metrics, id: "balance", title: "Balance", value: currency(findNumber(flattened, aliases: [
-                    "balance", "creditbalance", "remainingbalance", "remainingcredits", "creditsremaining"
-                ])))
+                appendMetric(&metrics, id: "balance", title: "Balance", value: currency(
+                    findNumber(flattened, aliases: [
+                        "balance", "creditbalance", "remainingbalance", "remainingcredits", "creditsremaining"
+                    ]),
+                    code: genericCurrencyCode))
                 appendMetric(&metrics, id: "tokens", title: "Tokens", value: compact(findNumber(flattened, aliases: [
                     "usedtokens", "tokencount", "tokenusage"
                 ])))
@@ -159,38 +194,58 @@ enum DashboardParser {
         if metrics.isEmpty, let plan = snapshot.plan, !plan.isEmpty {
             metrics.append(DashboardMetric(title: "Plan", value: plan))
         }
+        if metrics.isEmpty, financeProfile.trackingMode == .quotaOnly {
+            metrics.append(DashboardMetric(
+                id: "quota-only",
+                title: "Usage type",
+                value: "Quota only",
+                subtitle: "No monetary balance is exposed"))
+        }
 
         let history: [DashboardHistoryPoint]
         let historySummary: DashboardHistorySummary?
         let topModel: String?
-        if let deepSeek {
+        if let deepSeek = deepSeek {
             history = deepSeek.history
             historySummary = DashboardHistorySummary(
                 spend: deepSeek.monthCost,
                 tokens: deepSeek.monthTokens,
-                requests: deepSeek.monthRequests)
+                requests: deepSeek.monthRequests,
+                currencyCode: deepSeek.currencyCode,
+                spendIsEstimated: false)
             topModel = deepSeek.topModel
-        } else if let zai {
+        } else if let zai = zai {
             history = zai.history
             historySummary = DashboardHistorySummary(
                 spend: nil,
                 tokens: zai.totalTokens,
                 requests: nil)
             topModel = zai.topModel
-        } else if let costPayload {
+        } else if let costPayload = costPayload {
             history = costHistory(costPayload)
             historySummary = DashboardHistorySummary(
                 spend: costPayload.resolvedLast30DaysCostUSD,
                 tokens: costPayload.resolvedLast30DaysTokens,
-                requests: nil)
+                requests: nil,
+                currencyCode: "USD",
+                spendIsEstimated: false)
             topModel = costPayload.topModel
+        } else if let localSpend = localSpend {
+            history = localSpend.history
+            historySummary = DashboardHistorySummary(
+                spend: localSpend.last30DaysSpend,
+                tokens: nil,
+                requests: nil,
+                currencyCode: localSpend.currencyCode,
+                spendIsEstimated: true)
+            topModel = nil
         } else if providerSpecific {
-            history = []
-            historySummary = nil
+            history = extractHistory(from: roots)
+            historySummary = genericHistorySummary(history)
             topModel = nil
         } else {
             history = extractHistory(from: roots)
-            historySummary = genericHistorySummary(history)
+            historySummary = genericHistorySummary(history, currencyCode: genericCurrencyCode)
             topModel = findString(flattened, aliases: [
                 "topmodel", "mostusedmodel", "leadingmodel"
             ])
@@ -222,7 +277,7 @@ enum DashboardParser {
         let monthCost: Double?
         let todayRequests: Double
         let monthRequests: Double
-        let currencyCode: String
+        let currencyCode: String?
         let topModel: String?
         let history: [DashboardHistoryPoint]
     }
@@ -232,6 +287,23 @@ enum DashboardParser {
         let totalTokens: Double
         let modelCount: Int
         let topModel: String?
+        let history: [DashboardHistoryPoint]
+    }
+
+
+    private struct MiMoPayload {
+        let planCode: String?
+        let tokenUsed: Double?
+        let tokenLimit: Double?
+        let tokenPercent: Double?
+    }
+
+    private struct LocalSpendPayload {
+        let currencyCode: String
+        let todaySpend: Double
+        let last30DaysSpend: Double
+        let coverageStartedAt: Date?
+        let adjustmentIntervals: Int
         let history: [DashboardHistoryPoint]
     }
 
@@ -253,9 +325,42 @@ enum DashboardParser {
             monthCost: firstNumber(normalized, keys: ["currentmonthcost"]),
             todayRequests: todayRequests,
             monthRequests: monthRequests,
-            currencyCode: (normalized["currency"] as? String)?.uppercased() ?? "USD",
+            currencyCode: ProviderFinanceParsing.normalizedCurrencyCode(normalized["currency"] as? String),
             topModel: normalized["topmodel"] as? String,
             history: Array(history.suffix(60)))
+    }
+
+    private static func mimoPayload(from roots: [Any]) -> MiMoPayload? {
+        guard let usage = dictionary(named: "mimoUsage", in: roots) else { return nil }
+        let normalized = normalizedDictionary(usage)
+        return MiMoPayload(
+            planCode: firstString(normalized, keys: ["plancode", "planname"]),
+            tokenUsed: firstNumber(normalized, keys: ["tokenused", "usedtokens"]),
+            tokenLimit: firstNumber(normalized, keys: ["tokenlimit", "limittokens"]),
+            tokenPercent: firstNumber(normalized, keys: ["tokenpercent", "usedpercent"]))
+    }
+
+    private static func localSpendPayload(from roots: [Any]) -> LocalSpendPayload? {
+        guard let payload = dictionary(named: "localSpend", in: roots) else { return nil }
+        let normalized = normalizedDictionary(payload)
+        guard let currency = firstString(normalized, keys: ["currency", "currencycode"])
+            .flatMap(ProviderFinanceParsing.normalizedCurrencyCode),
+              let today = firstNumber(normalized, keys: ["todayspend"]),
+              let last30Days = firstNumber(normalized, keys: ["last30daysspend"])
+        else { return nil }
+
+        let dailyRows = normalized["daily"] as? [[String: Any]] ?? []
+        let history = dailyRows.compactMap(historyPoint)
+        let coverage = firstString(normalized, keys: ["coveragestartedat"])
+            .flatMap(isoDate)
+        let adjustments = Int(firstNumber(normalized, keys: ["adjustmentintervals"]) ?? 0)
+        return LocalSpendPayload(
+            currencyCode: currency,
+            todaySpend: today,
+            last30DaysSpend: last30Days,
+            coverageStartedAt: coverage,
+            adjustmentIntervals: adjustments,
+            history: Array(history.suffix(180)))
     }
 
     private static func zaiPayload(from roots: [Any]) -> ZaiPayload? {
@@ -329,6 +434,24 @@ enum DashboardParser {
         return normalized
     }
 
+    private static func firstString(_ dictionary: [String: Any], keys: [String]) -> String? {
+        for key in keys.map(normalize) {
+            if let value = dictionary[key] as? String,
+               !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                return value
+            }
+        }
+        return nil
+    }
+
+    private static func isoDate(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        return ISO8601DateFormatter().date(from: value)
+    }
+
     private static func zaiHourDate(_ value: String) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -342,10 +465,6 @@ enum DashboardParser {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = Calendar.current.isDateInToday(date) ? "HH:mm" : "MMM d HH:mm"
         return formatter.string(from: date)
-    }
-
-    private static func deepSeekBalanceDescription(_ values: [FlatValue]) -> String? {
-        findString(values, aliases: ["usageprimaryresetdescription", "resetdescription"])
     }
 
     private static func requestSubtitle(_ value: Double) -> String? {
@@ -427,21 +546,27 @@ enum DashboardParser {
         return nil
     }
 
-    private static func numberValue(_ value: Any) -> Double? {
-        if let number = value as? NSNumber { return number.doubleValue }
-        if let string = value as? String {
-            let cleaned = string
-                .replacingOccurrences(of: "$", with: "")
-                .replacingOccurrences(of: ",", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return Double(cleaned)
+    private static func findCurrencyCode(_ values: [FlatValue]) -> String? {
+        let currencyPaths = ["currency", "currencycode", "billingcurrency"]
+        for path in currencyPaths {
+            if let raw = findString(values, aliases: [path]),
+               let code = ProviderFinanceParsing.normalizedCurrencyCode(raw)
+            {
+                return code
+            }
         }
-        if let dictionary = value as? [String: Any] {
-            for key in ["value", "amount", "total"] {
-                if let nested = dictionary[key], let number = numberValue(nested) { return number }
+        for value in values {
+            if let text = value.value as? String,
+               let code = ProviderFinanceParsing.currencyCode(in: text)
+            {
+                return code
             }
         }
         return nil
+    }
+
+    private static func numberValue(_ value: Any) -> Double? {
+        ProviderFinanceParsing.numberValue(value)
     }
 
     private static func costHistory(_ payload: CostHistoryPayload) -> [DashboardHistoryPoint] {
@@ -454,15 +579,20 @@ enum DashboardParser {
         }
     }
 
-    private static func genericHistorySummary(_ history: [DashboardHistoryPoint]) -> DashboardHistorySummary? {
+    private static func genericHistorySummary(
+        _ history: [DashboardHistoryPoint],
+        currencyCode: String? = nil
+    ) -> DashboardHistorySummary? {
         guard !history.isEmpty else { return nil }
-        let spendValues = history.compactMap(\.spend)
-        let tokenValues = history.compactMap(\.tokens)
-        let requestValues = history.compactMap(\.requests)
+        let spendValues = history.compactMap { $0.spend }
+        let tokenValues = history.compactMap { $0.tokens }
+        let requestValues = history.compactMap { $0.requests }
         return DashboardHistorySummary(
             spend: spendValues.isEmpty ? nil : spendValues.reduce(0, +),
             tokens: tokenValues.isEmpty ? nil : tokenValues.reduce(0, +),
-            requests: requestValues.isEmpty ? nil : requestValues.reduce(0, +))
+            requests: requestValues.isEmpty ? nil : requestValues.reduce(0, +),
+            currencyCode: currencyCode,
+            spendIsEstimated: false)
     }
 
     private static func extractHistory(from roots: [Any]) -> [DashboardHistoryPoint] {
@@ -546,10 +676,25 @@ enum DashboardParser {
         return formatter.string(from: interval).map { "Updated \($0) ago" } ?? "Updated recently"
     }
 
-    private static func mergedQuotaLanes(snapshot: ProviderSnapshot, roots: [Any]) -> [DashboardQuotaLane] {
+    private static func mergedQuotaLanes(
+        snapshot: ProviderSnapshot,
+        roots: [Any],
+        mimo: MiMoPayload?
+    ) -> [DashboardQuotaLane] {
         if snapshot.provider == "deepseek" { return [] }
         var lanes = quotaLanes(snapshot)
         var seen = Set(lanes.map { normalize($0.title) })
+
+        if let percent = mimo?.tokenPercent {
+            let title = "Token plan"
+            lanes.append(DashboardQuotaLane(
+                id: "mimo-token-plan",
+                title: title,
+                usedPercent: max(0, min(100, percent)),
+                resetText: mimo?.planCode))
+            seen.insert(normalize(title))
+        }
+
         for root in roots {
             for lane in extractQuotaLanes(root) where !seen.contains(normalize(lane.title)) {
                 lanes.append(lane)
@@ -576,7 +721,7 @@ enum DashboardParser {
             if let dictionary = value as? [String: Any] {
                 var normalized: [String: Any] = [:]
                 for (key, nested) in dictionary { normalized[normalize(key)] = nested }
-                if let used = firstNumber(normalized, keys: ["usedpercent", "percentused", "usagepercent"]) {
+                if let used = firstNumber(normalized, keys: ["usedpercent", "percentused", "usagepercent", "tokenpercent"]) {
                     let titleValue = firstValue(normalized, keys: ["title", "label", "name", "windowlabel", "metric"])
                     let minutes = firstNumber(normalized, keys: ["windowminutes", "minutes", "durationminutes"])
                     let title: String
@@ -624,6 +769,53 @@ enum DashboardParser {
         return message
     }
 
+    private static func appendBalanceMetric(
+        _ metrics: inout [DashboardMetric],
+        observation: ProviderBalanceObservation?
+    ) {
+        guard let observation = observation else { return }
+        var breakdown: [String] = []
+        if let paid = observation.paid,
+           let formatted = currency(paid, code: observation.currencyCode)
+        {
+            breakdown.append("Paid \(formatted)")
+        }
+        if let granted = observation.granted,
+           let formatted = currency(granted, code: observation.currencyCode)
+        {
+            breakdown.append("Granted \(formatted)")
+        }
+        metrics.append(DashboardMetric(
+            id: "balance",
+            title: "Balance",
+            value: currency(observation.total, code: observation.currencyCode) ?? decimal(observation.total),
+            subtitle: breakdown.isEmpty ? nil : breakdown.joined(separator: " · ")))
+    }
+
+    private static func appendLocalSpendMetrics(
+        _ metrics: inout [DashboardMetric],
+        payload: LocalSpendPayload?
+    ) {
+        guard let payload = payload else { return }
+        var subtitle = payload.coverageStartedAt.map { "Estimated locally since \(shortDate($0))" }
+            ?? "Estimated locally"
+        if payload.adjustmentIntervals > 0 {
+            subtitle += " · \(payload.adjustmentIntervals) adjustment interval"
+            if payload.adjustmentIntervals != 1 { subtitle += "s" }
+            subtitle += " excluded"
+        }
+        metrics.append(DashboardMetric(
+            id: "today-spend-estimate",
+            title: "Today est.",
+            value: currency(payload.todaySpend, code: payload.currencyCode) ?? decimal(payload.todaySpend),
+            subtitle: subtitle))
+        metrics.append(DashboardMetric(
+            id: "30d-spend-estimate",
+            title: "30d est.",
+            value: currency(payload.last30DaysSpend, code: payload.currencyCode) ?? decimal(payload.last30DaysSpend),
+            subtitle: "Balance-delta estimate"))
+    }
+
     private static func appendCostMetric(
         _ metrics: inout [DashboardMetric],
         id: String,
@@ -649,10 +841,10 @@ enum DashboardParser {
         id: String,
         title: String,
         value: Double?,
-        currencyCode: String,
+        currencyCode: String?,
         unavailableSubtitle: String)
     {
-        if let value {
+        if let value = value {
             metrics.append(DashboardMetric(
                 id: id,
                 title: title,
@@ -671,14 +863,17 @@ enum DashboardParser {
         metrics.append(DashboardMetric(id: id, title: title, value: value))
     }
 
-    private static func currency(_ value: Double?, code: String = "USD") -> String? {
+    private static func currency(_ value: Double?, code: String?) -> String? {
         guard let value = value else { return nil }
+        guard let code = ProviderFinanceParsing.normalizedCurrencyCode(code) else {
+            return decimal(value)
+        }
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
-        formatter.currencyCode = code.uppercased()
+        formatter.currencyCode = code
         formatter.maximumFractionDigits = 2
         return formatter.string(from: NSNumber(value: value))
-            ?? "\(code.uppercased()) \(String(format: "%.2f", value))"
+            ?? "\(code) \(String(format: "%.2f", value))"
     }
 
     private static func compact(_ value: Double?) -> String? {

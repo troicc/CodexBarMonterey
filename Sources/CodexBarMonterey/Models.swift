@@ -268,6 +268,8 @@ enum ProviderCatalog {
             "minimax": "https://platform.minimax.io/user-center/payment/billing",
             "openrouter": "https://openrouter.ai/activity",
             "deepseek": "https://platform.deepseek.com/usage",
+            "moonshot": "https://platform.kimi.ai/",
+            "mimo": "https://platform.xiaomimimo.com/",
             "mistral": "https://console.mistral.ai/usage",
             "bedrock": "https://console.aws.amazon.com/cost-management/home",
         ]

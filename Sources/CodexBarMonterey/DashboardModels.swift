@@ -15,7 +15,6 @@ struct DashboardMetric: Identifiable, Hashable {
         self.subtitle = subtitle
     }
 }
-
 struct DashboardHistoryPoint: Identifiable, Hashable {
     let id: String
     let label: String
@@ -31,7 +30,6 @@ struct DashboardHistoryPoint: Identifiable, Hashable {
         self.requests = requests
     }
 }
-
 struct DashboardQuotaLane: Identifiable, Hashable {
     let id: String
     let title: String
@@ -43,8 +41,23 @@ struct DashboardHistorySummary: Hashable {
     let spend: Double?
     let tokens: Double?
     let requests: Double?
-}
+    let currencyCode: String?
+    let spendIsEstimated: Bool
 
+    init(
+        spend: Double?,
+        tokens: Double?,
+        requests: Double?,
+        currencyCode: String? = nil,
+        spendIsEstimated: Bool = false
+    ) {
+        self.spend = spend
+        self.tokens = tokens
+        self.requests = requests
+        self.currencyCode = currencyCode
+        self.spendIsEstimated = spendIsEstimated
+    }
+}
 struct ProviderDashboard: Identifiable, Hashable {
     let id: String
     let title: String
@@ -58,7 +71,6 @@ struct ProviderDashboard: Identifiable, Hashable {
     let errorMessage: String?
     let dashboardURL: URL?
     let statusURL: URL?
-
     static func loading(providerID: String, title: String) -> ProviderDashboard {
         ProviderDashboard(
             id: providerID,
@@ -75,7 +87,6 @@ struct ProviderDashboard: Identifiable, Hashable {
             statusURL: ProviderCatalog.statusURL(for: providerID))
     }
 }
-
 enum ProviderBrand {
     static func symbol(for id: String) -> String {
         switch id {
@@ -93,12 +104,13 @@ enum ProviderBrand {
         case "kiro": return "k.circle.fill"
         case "grok": return "x.circle.fill"
         case "deepseek": return "scope"
+        case "moonshot", "kimi": return "moon.stars.fill"
+        case "mimo": return "m.circle.fill"
         case "mistral": return "wind"
         case "bedrock": return "cloud.fill"
         default: return "circle.grid.2x2.fill"
         }
     }
-
     static func nsColor(for id: String) -> NSColor {
         let fixed: [String: NSColor] = [
             "codex": NSColor(calibratedRed: 0.84, green: 0.32, blue: 0.93, alpha: 1),
@@ -109,10 +121,12 @@ enum ProviderBrand {
             "factory": NSColor(calibratedRed: 0.58, green: 0.49, blue: 0.95, alpha: 1),
             "zai": NSColor(calibratedRed: 0.73, green: 0.35, blue: 0.94, alpha: 1),
             "minimax": NSColor(calibratedRed: 0.38, green: 0.82, blue: 0.94, alpha: 1),
+            "moonshot": NSColor(calibratedRed: 0.13, green: 0.36, blue: 0.92, alpha: 1),
+            "kimi": NSColor(calibratedRed: 0.13, green: 0.36, blue: 0.92, alpha: 1),
+            "mimo": NSColor(calibratedRed: 0.98, green: 0.42, blue: 0.18, alpha: 1),
         ]
         return fixed[id] ?? NSColor.providerColor(id: id)
     }
-
     static func color(for id: String) -> Color {
         Color(nsColor: nsColor(for: id))
     }

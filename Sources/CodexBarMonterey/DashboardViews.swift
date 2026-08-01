@@ -339,11 +339,20 @@ struct DashboardSummaryCard: View {
                         .frame(height: 78)
                 }
                 HStack(spacing: 4) {
+                    if let summary = dashboard.historySummary,
+                       let spend = summary.spend,
+                       spend > 0
+                    {
+                        Text("\(summary.spendIsEstimated ? "30d est." : (dashboard.id == "deepseek" ? "Month" : "30d")): \(currencyNumber(spend, code: summary.currencyCode))")
+                    }
                     if let tokens = dashboard.historySummary?.tokens, tokens > 0 {
+                        if dashboard.historySummary?.spend != nil { Text("·") }
                         Text("\(dashboard.id == "zai" ? "24h" : (dashboard.id == "deepseek" ? "Month" : "30d")): \(compactNumber(tokens)) tokens")
                     }
                     if let requests = dashboard.historySummary?.requests, requests > 0 {
-                        if dashboard.historySummary?.tokens != nil { Text("·") }
+                        if dashboard.historySummary?.spend != nil || dashboard.historySummary?.tokens != nil {
+                            Text("·")
+                        }
                         Text("\(compactNumber(requests)) requests")
                     }
                     Spacer()
@@ -391,6 +400,8 @@ private struct MetricView: View {
                 Text(subtitle)
                     .font(.system(size: 9))
                     .foregroundColor(.white.opacity(0.62))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -558,6 +569,13 @@ struct ProviderDetailPanelView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(metric.title).font(.system(size: 10, weight: .semibold)).foregroundColor(.white.opacity(0.52))
                             Text(metric.value).font(.system(size: 16, weight: .bold)).lineLimit(1).minimumScaleFactor(0.7)
+                            if let subtitle = metric.subtitle {
+                                Text(subtitle)
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.white.opacity(0.46))
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(10)
@@ -597,6 +615,10 @@ private struct DetailedHistoryChart: View {
     let points: [DashboardHistoryPoint]
     let providerID: String
 
+
+    private var values: [Double] {
+        resolvedHistoryValues(points)
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             MiniHistoryChart(
@@ -605,7 +627,7 @@ private struct DetailedHistoryChart: View {
                 fixedMaximum: nil)
                 .frame(height: 102)
             LineHistoryChart(
-                values: points.map { $0.tokens ?? $0.requests ?? 0 },
+                values: values,
                 color: ProviderBrand.color(for: providerID),
                 fixedMaximum: nil)
                 .frame(height: 72)
@@ -725,6 +747,28 @@ private struct CompactProminentButtonStyle: ButtonStyle {
             .foregroundColor(.white)
             .background(RoundedRectangle(cornerRadius: 7).fill(color.opacity(configuration.isPressed ? 0.72 : 0.96)))
     }
+}
+
+private func resolvedHistoryValues(_ points: [DashboardHistoryPoint]) -> [Double] {
+    if points.contains(where: { ($0.spend ?? 0) > 0 }) {
+        return points.map { $0.spend ?? 0 }
+    }
+    if points.contains(where: { ($0.tokens ?? 0) > 0 }) {
+        return points.map { $0.tokens ?? 0 }
+    }
+    return points.map { $0.requests ?? 0 }
+}
+
+private func currencyNumber(_ value: Double, code: String?) -> String {
+    guard let rawCode = code?.uppercased(), rawCode.count == 3 else {
+        return String(format: "%.2f", value)
+    }
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.currencyCode = rawCode
+    formatter.maximumFractionDigits = 2
+    return formatter.string(from: NSNumber(value: value))
+        ?? "\(rawCode) \(String(format: "%.2f", value))"
 }
 
 private func compactNumber(_ value: Double) -> String {

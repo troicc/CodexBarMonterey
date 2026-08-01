@@ -1,0 +1,49 @@
+--- a/Sources/CodexBarCore/Providers/Moonshot/MoonshotUsageFetcher.swift
++++ b/Sources/CodexBarCore/Providers/Moonshot/MoonshotUsageFetcher.swift
+@@ -7,5 +7,7 @@
+     public let summary: MoonshotUsageSummary
+-
+-    public init(summary: MoonshotUsageSummary) {
++    public let region: MoonshotRegion
++
++    public init(summary: MoonshotUsageSummary, region: MoonshotRegion = .international) {
+         self.summary = summary
++        self.region = region
+     }
+@@ -13,3 +15,3 @@
+     public func toUsageSnapshot() -> UsageSnapshot {
+-        self.summary.toUsageSnapshot()
++        self.summary.toUsageSnapshot(region: self.region)
+     }
+@@ -30,11 +32,8 @@
+     }
+-    public func toUsageSnapshot() -> UsageSnapshot {
+-        let balance = UsageFormatter.usdString(self.availableBalance)
+-        let loginMethod: String
+-        if self.cashBalance < 0 {
+-            let deficit = UsageFormatter.usdString(abs(self.cashBalance))
+-            loginMethod = "Balance: \(balance) · \(deficit) in deficit"
+-        } else {
+-            loginMethod = "Balance: \(balance)"
+-        }
++    public func toUsageSnapshot(region: MoonshotRegion) -> UsageSnapshot {
++        let currency = region == .china ? "CNY" : "USD"
++        let balance = Self.money(self.availableBalance, currency: currency)
++        let cash = Self.money(self.cashBalance, currency: currency)
++        let voucher = Self.money(self.voucherBalance, currency: currency)
++        let loginMethod = "Balance: \(balance) (Paid: \(cash) / Granted: \(voucher))"
+         let identity = ProviderIdentitySnapshot(
+@@ -50,4 +49,8 @@
+             updatedAt: self.updatedAt,
+             identity: identity)
+     }
++
++    private static func money(_ value: Double, currency: String) -> String {
++        "\(currency) \(String(format: "%.2f", value))"
++    }
+ }
+@@ -120,3 +123,3 @@
+         let summary = try self.parseSummary(data: response.data)
+-        return MoonshotUsageSnapshot(summary: summary)
++        return MoonshotUsageSnapshot(summary: summary, region: region)
+     }

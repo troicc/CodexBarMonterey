@@ -11,7 +11,6 @@ final class DashboardStore: ObservableObject {
     @Published private(set) var lastError: String?
 
     let client: CLIClient
-
     var onOpenSettings: (() -> Void)?
     var onOpenAllDetails: (() -> Void)?
     var onOpenProviderDetails: ((String) -> Void)?
@@ -22,11 +21,11 @@ final class DashboardStore: ObservableObject {
     private var supplementalJSONBySnapshot: [String: String] = [:]
     private var supplementalJSONByProvider: [String: String] = [:]
     private let quotaTrendStore = LocalQuotaTrendStore()
+    private let spendHistoryStore = LocalSpendHistoryStore()
 
     init(client: CLIClient) {
         self.client = client
     }
-
     var selectedSnapshot: ProviderSnapshot? {
         guard let selectedProviderID = selectedProviderID else { return snapshots.first }
         return snapshots.first(where: { $0.id == selectedProviderID || $0.provider == selectedProviderID })
@@ -36,7 +35,6 @@ final class DashboardStore: ObservableObject {
         guard let snapshot = selectedSnapshot else { return nil }
         return dashboards[snapshot.id] ?? dashboards[snapshot.provider]
     }
-
     func refresh() async {
         guard !isRefreshing else { return }
         isRefreshing = true
@@ -48,9 +46,15 @@ final class DashboardStore: ObservableObject {
             }
             var rebuilt: [String: ProviderDashboard] = [:]
             for snapshot in snapshots {
-                let cachedSupplement = supplementalJSONBySnapshot[snapshot.id] ?? supplementalJSONByProvider[snapshot.provider]
-                let localTrend = quotaTrendStore.record(snapshot: snapshot)
-                let combinedSupplement = Self.combinedSupplementalJSON(cachedSupplement, localTrend)
+                let cachedSupplement = cachedSupplement(for: snapshot)
+                let localQuota = quotaTrendStore.record(snapshot: snapshot)
+                let localSpend = spendHistoryStore.record(
+                    snapshot: snapshot,
+                    supplementalJSON: cachedSupplement)
+                let combinedSupplement = Self.combinedSupplementalJSON(
+                    cachedSupplement,
+                    localQuota,
+                    localSpend)
                 let dashboard = DashboardParser.dashboard(
                     snapshot: snapshot,
                     supplementalJSON: combinedSupplement)
@@ -73,7 +77,6 @@ final class DashboardStore: ObservableObject {
         }
         isRefreshing = false
     }
-
     func select(_ snapshot: ProviderSnapshot) {
         selectedProviderID = snapshot.id
         Task { await enrichDashboard(for: snapshot) }
@@ -88,11 +91,9 @@ final class DashboardStore: ObservableObject {
         guard let snapshot = selectedSnapshot else { return }
         await enrichDashboard(for: snapshot)
     }
-
     func enrich(_ snapshot: ProviderSnapshot) async {
         await enrichDashboard(for: snapshot)
     }
-
     private func enrichDashboard(for snapshot: ProviderSnapshot) async {
         let key = snapshot.id
         guard !loadingProviders.contains(key) else { return }
@@ -103,18 +104,21 @@ final class DashboardStore: ObservableObject {
             supplementalJSONBySnapshot[key] = fetchedSupplement
             supplementalJSONByProvider[snapshot.provider] = fetchedSupplement
         }
-        let cachedSupplement = fetchedSupplement ??
-            supplementalJSONBySnapshot[key] ??
-            supplementalJSONByProvider[snapshot.provider]
-        let localTrend = quotaTrendStore.record(snapshot: snapshot)
-        let resolvedSupplement = Self.combinedSupplementalJSON(cachedSupplement, localTrend)
+        let cachedSupplement = fetchedSupplement ?? cachedSupplement(for: snapshot)
+        let localQuota = quotaTrendStore.record(snapshot: snapshot)
+        let localSpend = spendHistoryStore.record(
+            snapshot: snapshot,
+            supplementalJSON: cachedSupplement)
+        let resolvedSupplement = Self.combinedSupplementalJSON(
+            cachedSupplement,
+            localQuota,
+            localSpend)
         let dashboard = DashboardParser.dashboard(
             snapshot: snapshot,
             supplementalJSON: resolvedSupplement)
         dashboards[key] = dashboard
         dashboards[snapshot.provider] = dashboard
     }
-
     func dashboard(for snapshot: ProviderSnapshot) -> ProviderDashboard {
         dashboards[snapshot.id] ?? dashboards[snapshot.provider] ?? DashboardParser.dashboard(snapshot: snapshot)
     }
@@ -128,19 +132,28 @@ final class DashboardStore: ObservableObject {
         guard let url = selectedDashboard?.statusURL else { return }
         NSWorkspace.shared.open(url)
     }
-
     func copySelectedJSON() {
         guard let json = selectedSnapshot?.rawJSON else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(json, forType: .string)
     }
 
-    private static func combinedSupplementalJSON(_ first: String?, _ second: String?) -> String? {
-        let sources = [first, second].compactMap { $0 }.filter { !$0.isEmpty }
+    private func cachedSupplement(for snapshot: ProviderSnapshot) -> String? {
+        if let exact = supplementalJSONBySnapshot[snapshot.id] { return exact }
+        // Provider-level fallback is safe only when that provider has a single
+        // account. This prevents one account's supplemental history from being
+        // displayed under another account with the same provider ID.
+        let accountCount = snapshots.filter { $0.provider == snapshot.provider }.count
+        guard accountCount <= 1 else { return nil }
+        return supplementalJSONByProvider[snapshot.provider]
+    }
+
+    private static func combinedSupplementalJSON(_ sources: String?...) -> String? {
+        let sources = sources.compactMap { $0 }.filter { !$0.isEmpty }
         guard !sources.isEmpty else { return nil }
         if sources.count == 1 { return sources[0] }
         let objects = sources.compactMap { source -> Any? in
-            guard let data = source.data(using: String.Encoding.utf8) else { return nil }
+            guard let data = source.data(using: .utf8) else { return nil }
             return try? JSONSerialization.jsonObject(with: data)
         }
         guard !objects.isEmpty,

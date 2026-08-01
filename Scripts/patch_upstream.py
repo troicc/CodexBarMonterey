@@ -352,6 +352,7 @@ def main() -> None:
     patch_dir = project_root / "Patches"
     apply_optional_patch(codexbar, patch_dir / "CodexBar.patch")
     apply_optional_patch(codexbar, patch_dir / "CodexBarLiveUsage.patch")
+    apply_optional_patch(codexbar, patch_dir / "CodexBarFinanceProviders.patch")
     apply_optional_patch(sweet, patch_dir / "SweetCookieKit.patch")
     apply_optional_patch(commander, patch_dir / "Commander.patch")
 
