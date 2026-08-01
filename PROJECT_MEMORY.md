@@ -8,24 +8,24 @@
 | --- | --- |
 | GitHub 仓库 | troicc/CodexBarMonterey |
 | origin | https://github.com/troicc/CodexBarMonterey.git |
-| 分支快照 | 本轮发布分支名为 `codex/native-experience-refactor`；实际分支必须运行 Git 命令确认 |
-| 重构基线 | bed623c — docs: add project memory and release runbook；本轮重构位于其后的提交 |
-| 工作树期望 | 本轮提交后应干净；若存在差异，不得默认属于本轮，必须重新审查 |
+| 分支快照 | 2026-08-01 本轮从 `main@1e5f1b9` 开始原生状态菜单重构；实际分支必须运行 Git 命令确认 |
+| 重构基线 | 1e5f1b9 — docs: record v0.7.0 install exception；本轮 UI/功能重构位于其后的工作树 |
+| 工作树期望 | 本轮记录时包含尚未提交的原生菜单重构；接手时必须用 Git 重新确认归属，不能盲目覆盖 |
 | 上游引擎常量 | ENGINE_VERSION = v0.46.0 |
-| 当前正式 tag | v0.7.0 已推送到提交 4b7e3de；Release 最终状态下次接手时再按需复核 |
-| 下一版本规则 | 小优化从 v0.7.0 递增到 v0.7.1；较大重构递增到 v0.8.0 |
+| 当前正式 tag | 本轮开始时为 v0.7.0；用户已明确要求把当前超大重构发布为 v0.10.0，最终状态须以 Git/GitHub 复核 |
+| 下一版本规则 | 当前发布目标为 v0.10.0；应用版本来自 tag，仍不得修改 ENGINE_VERSION |
 | 最低系统 | macOS 12 Monterey |
 | 架构 | Universal 2：arm64 + x86_64 |
 | UI 技术 | AppKit 菜单栏壳 + SwiftUI 内容视图 |
 | 发布入口 | .github/workflows/release.yml，由 v* tag push 触发 |
 
-本轮重构从 `main@bed623c` 开始，完整发布分支为 `codex/native-experience-refactor`。是否已经合并进 `main`、是否已通过最新 CI、是否已打 tag 或正式发布，都必须通过 GitHub/Git 现状确认，不能从本快照推断。
+v0.7.0 原生 dashboard 重构从 `main@bed623c` 开始并已进入 `main`。本轮更接近上游的原生状态菜单/账号/状态告警重构从 `main@1e5f1b9` 开始；是否已提交、进入分支、通过 CI、打 tag 或正式发布，都必须通过 GitHub/Git 现状确认，不能从本快照推断。
 
 ## 2. 项目定位
 
 这是一个面向 macOS 12 Monterey 的 CodexBar 兼容版本/移植版本。核心目标是：
 
-- 在较旧 macOS 上保留菜单栏常驻、弹出 dashboard、设置、状态页和登录启动能力；
+- 在较旧 macOS 上保留菜单栏常驻、原生状态菜单、可选 dashboard、设置、状态页和登录启动能力；
 - 复用或打包上游 CodexBarCLI 的 provider 数据引擎，而不是在 UI 中重复实现 provider API；
 - 通过 Sparkle 2.9.4 提供整包更新；
 - 产出 Apple Silicon 与 Intel 均可运行的 Universal 2 应用。
@@ -40,18 +40,20 @@
 
 ~~~text
 菜单栏状态项
-  -> MenuController
+  -> MenuController / NativeMenuViews（默认原生 NSMenu）
   -> DashboardStore / CLIClient
   -> bundled CodexBarCLI --format json --json-only --status
   -> DashboardParser / typed provider payloads
-  -> DashboardViews
+  -> NativeMenuViews / DashboardViews
 ~~~
 
 原则：UI 不直接请求 Codex、DeepSeek、z.ai 等 provider endpoint；所有 provider 访问、认证和状态采集尽量由 CLI 完成。修改数据字段时，优先确认 CLI JSON contract、patch 和 parser 是否同时更新。
 
 ### 关键文件
 
-- Sources/CodexBarMonterey/MenuController.swift：菜单栏状态项、popover、动作路由。
+- Sources/CodexBarMonterey/MenuController.swift：菜单栏状态项、原生菜单、刷新调度、动作路由与运行时 UI smoke。
+- Sources/CodexBarMonterey/NativeMenuViews.swift：跟随系统外观的菜单内 Overview、Provider 指标/额度/状态 hosted rows。
+- Sources/CodexBarMonterey/ProviderAlertController.swift：服务故障/恢复和 quota 阈值的本地通知去重。
 - Sources/CodexBarMonterey/DashboardStore.swift：刷新、状态缓存和 dashboard 状态。
 - Sources/CodexBarMonterey/CLIClient.swift：启动 bundled CLI、传入 provider/环境变量、读取 JSON/text。
 - Sources/CodexBarMonterey/DashboardParser.swift：兼容多种 provider payload，生成 UI 模型。
@@ -82,18 +84,18 @@
 
 ## 4. 当前 UI 事实
 
-截图和代码对应的主要交互如下：
+代码对应的主要交互如下：
 
-- DashboardTheme.popoverWidth = 328，popover 高度约 520。
-- 顶部是四列 provider switcher：Overview、Codex、DeepSeek、z.ai；项目当前还有其他 provider 数据，但不一定在顶部固定展示。
-- Overview tile 会打开独立的全量详情窗口（AllProvidersDashboardView），不是在 popover 内展开。
-- provider summary card 最多展示四个 metrics、mini history chart、history summary、top model；下面是 quota lanes。
-- 底部动作：Usage Dashboard、Status Page、Refresh、Settings、About CodexBar、Quit。
-- DashboardActionRow 已绑定真实的 ⌘R、⌘,、⌘Q；应用主菜单也提供同一组标准快捷键。
-- 菜单栏图标是自绘的简化 meter/percentage 图标；没有上游那种丰富的 provider-specific 图标布局。
-- 状态项左键打开 popover，右键打开原生 NSMenu；详情页支持滚动，主要控件和图表提供 VoiceOver 描述。
-- 单 Provider 详情窗观察共享 DashboardStore；刷新后会实时更新，而不是保留打开瞬间的静态副本。
-- 刷新失败会保留旧数据并明确显示 stale/error banner；刷新期间的新请求会合并为下一轮，而不是静默丢弃。
+- 状态项直接绑定原生 `NSMenu`，左键/右键都采用系统菜单跟踪；不再把固定深色 popover 作为默认入口。
+- 合并模式显示系统外观的 Overview hosted row、可配置 3/6/9/12 个 Provider/账号摘要，以及包含全部账号的 Providers 子菜单。
+- 每个 Provider 子菜单显示服务状态、连接错误、最多四个菜单内指标、最多四条菜单内 quota、已用/剩余百分比、重置时间和 pace；完整指标与 quota 不再在 parser 层截断。
+- 原 328×520 多 Provider dashboard 与 All Providers 窗口继续作为可选入口；“Open Detailed Dashboard” 已改为直接锚定状态栏图标、跟随系统外观的单 Provider `NSPopover`，不再新建浮动窗口。
+- 状态项可选 usage meter、已用百分比、剩余百分比或 provider 图标；支持合并/每账号分离。
+- Settings 改为 General、Menu Bar、Notifications、Providers、Advanced 侧边栏；可控制刷新、菜单信息密度、账号名、状态、quota 表达和通知阈值。
+- 刷新支持 Manual、固定间隔与 Adaptive；Adaptive 在最近打开菜单后为 2 分钟、warm 为 5 分钟、idle 为 15 分钟、低电量为 30 分钟，并可打开菜单时刷新。
+- Provider status 已进入 dashboard/header/menu/status-item tooltip；incident、恢复和 quota 阈值可发送 opt-in 本地通知，首次刷新只建立 baseline。
+- DeepSeek/Venice tokenAccounts 可在设置中新增并事务验证、查看、切换和确认删除；设置还显示真实 snapshot 的账号、来源、套餐、quota 和连接/服务状态。
+- DashboardActionRow 继续绑定真实的 ⌘R、⌘,、⌘Q；单 Provider 详情 popover 观察共享 DashboardStore，刷新失败保留旧数据，刷新请求继续 coalesce。
 
 ## 5. 与上游 steipete/CodexBar 的对比结论
 
@@ -113,6 +115,8 @@
 - 使用固定尺寸、信息密度高的 dashboard，打开后能快速看到今日/30 天 tokens、成本、趋势和 top model。
 - 已把 DeepSeek、z.ai、Moonshot 等 provider 的 finance/quota 数据压进统一 dashboard。
 - 继续使用上游 CLI 数据引擎，provider 覆盖和认证基础不会完全从零维护。
+- 原生 NSMenu 已成为默认交互，同时保留适合财务/趋势查看的独立 dashboard；旧系统不必在两者中二选一。
+- Token Account 的 Save & Verify、切换和删除均有完整配置回滚，避免半写入凭据。
 
 ### 上游更强的地方
 
@@ -197,13 +201,17 @@
 
 ## 7. 已知风险、文档差异和不要误判的地方
 
-1. 图形化详情页只映射 dashboard parser 支持的字段；旧的未调用 text/cost UI client 方法已删除，原始字段需要通过 bundled CLI 查看。
+1. 图形化详情页只映射 dashboard parser 支持的字段；parser 已不再固定截断 4 metrics/8 quota，但未识别的 provider-specific 语义仍需通过 bundled CLI 查看。
 2. release workflow 会验证 tag commit 属于 `origin/main`，并串行化 appcast 发布；`appcast.xml` 必须保持可追踪，不能重新加入 `.gitignore`。
-3. 没有 SPARKLE_PUBLIC_KEY / SPARKLE_PRIVATE_KEY 时，zip/checksum 仍可能发布，但不会生成签名 appcast，Sparkle 自动更新链路不完整。
+3. 没有 SPARKLE_PUBLIC_KEY / SPARKLE_PRIVATE_KEY 时，zip/checksum 仍可能发布，但不会生成签名 appcast，Sparkle 自动更新链路不完整。本轮用户明确暂缓建立安全自动更新链路；不要把 UI/功能重构误写成已经修复该问题。
 4. 没有 Developer ID 签名和 Apple notarization secrets 时，workflow 会使用 ad-hoc signing；公开分发时会遇到 Gatekeeper 信任/安装体验问题。
 5. 本机 Swift 5.6 不能读取 `swift-tools-version: 6.2` manifest；轻量 Swift 回归脚本与 patcher 已使用临时 ModuleCache，可本地运行，但完整 App/Sparkle 编译仍以 macOS 26 CI 为 release gate。
-6. 自定义 dashboard 对丰富 provider 字段做了压缩；如果新增 provider 字段，先检查 parser 的 typed path、generic fallback、metrics 上限 4、quota lane 上限 8 是否会丢信息。
+6. 原生菜单为保持可读性只预览前四个 metrics/quota，但完整模型和详情页保留全部已解析字段；如果新增 provider 字段，先检查 parser 的 typed path、generic fallback 和菜单/详情两级展示是否都合理。
 7. 本地 spend history 是余额差估算，不应在 UI 或 release note 中写成 provider 官方账单。
+8. 通知只对刷新后的状态转移/阈值跨越触发，首次成功刷新只建立 baseline；不要改成每次启动重放当前 incident/quota，否则会制造通知风暴。
+9. Token Account 删除会先显示确认框；配置变更通过 backup/validate/probe（切换）或 backup/validate（删除）事务执行。不得在 UI 中读取或回显 token 明文。
+10. `UpdaterController` 在未链接 Sparkle 的直接本地构建中有明确的手工更新 fallback，正式 SwiftPM bundle 仍使用 Sparkle；这只是为了本机 UI 运行验证，不代表签名 appcast 已完成。
+11. `Scripts/build_local_validation.sh` 只直接编译当前 UI shell，并从指定模板 App 复制 helper/Sparkle；它可以证明 UI、双架构主程序和实际菜单/popover 路径，但不能证明 pinned engine、正式 Sparkle linkage、notarization 或 Release archive。
 
 ## 8. 验证命令
 
@@ -217,6 +225,16 @@ Scripts/test_cost_history_parser.sh
 Scripts/test_provider_auth.sh
 bash -n Scripts/*.sh
 ~~~
+
+Swift 5.6 本机 UI/交互验证包：
+
+~~~bash
+CODEXBAR_LOCAL_TEMPLATE_APP="/Applications/CodexBar Monterey.app" \
+CODEXBAR_LOCAL_VERSION="0.10.0" \
+Scripts/build_local_validation.sh
+~~~
+
+需要运行时菜单/popover smoke 时先退出已运行实例，并增加 `CODEXBAR_LOCAL_RUN_UI_SMOKE=1`。接受产物后使用 `Scripts/install_local.sh "/absolute/path/to/app"`；安装器会保留可恢复的旧 App 备份。
 
 release workflow 还会执行：
 
@@ -274,6 +292,8 @@ git diff --stat origin/main...HEAD
 也就是说，对于发布型交付，“push + release + download/install verification”是一项完整任务，不能像普通 WIP 分支那样只推代码就结束。若用户只明确要求保存 WIP 分支，则不要擅自 release。
 
 本次 `v0.7.0` 是明确例外：用户已经自行安装 branch artifact，随后要求只把未来流程写入记忆，并明确不需要继续追踪 Release 或再次安装。因此本次不得执行第 5/6 步；Release run 是否最终成功留待未来有实际需要时再检查。
+
+本次 `v0.10.0` 是另一项明确例外：用户要求完成分支 build、main、tag 和 GitHub Release 核验，但明确“不用下载”Release 资产；本机安装改用精确源码生成并通过 runtime smoke 的本地 Universal 2 验证包。不得在完成后又下载 Release zip 覆盖本机。
 
 以 `v0.7.0` 为例：
 
@@ -375,7 +395,84 @@ git ls-remote --tags origin vX.Y.Z
 
 1. 每次都先把本文件视为“可能已漂移”，再读本文件并检查 git status、git log -5、git branch -vv；不要假设快照中的 branch、HEAD、CI、tag 或发布状态仍然成立，也不要仅凭历史对话继续操作。
 2. 修改 provider 数据时沿着 CLI → patch/env → CLIClient → parser → view → contract tests 全链路核对。
-3. 修改 UI 时优先保持 Monterey 的 fixed-size popover、AppKit 生命周期和 accessibility；不要未经确认引入 macOS 14-only API。
+3. 修改 UI 时优先保持默认原生 NSMenu、可选 fixed-size dashboard、AppKit 生命周期和 accessibility；不要未经确认引入 macOS 14-only API。
 4. 修改发布逻辑时先读完整 .github/workflows/release.yml、Scripts/build_universal.sh 和 Scripts/generate_appcast.sh。
 5. 任何涉及真实发布、tag push、GitHub Release、证书或 notarization 的操作，都先给出将要触发的外部效果；除非用户明确要求，不要代替用户 push/tag。
 6. 架构、数据 contract、关键交互、验证门禁或 release runbook 发生实质变化时，必须在同一提交更新本文件；不能把“以后再补记忆”留给下一次对话。
+
+## 11. 2026-08-01 原生状态菜单与功能完善重构
+
+本节记录从 `main@1e5f1b9` 开始、最终由用户指定为 v0.10.0 的大型重构。用户明确把“可工作的安全自动更新链路”移出本轮范围；本轮完成标准是更接近上游的原生菜单、信息展示、菜单栏、账号认证和状态告警，并证明应用可编译、启动和使用真实 helper 构建菜单。
+
+### 11.1 默认交互与信息展示
+
+- `NSStatusItem.menu` 现在直接挂接动态 `NSMenu`；`MenuController` 实现 `NSMenuDelegate`，菜单打开前按最新 store 状态重建，不再通过左键 action 默认打开 popover。
+- 合并模式使用 `NativeMenuHeaderView` + `NativeMenuOverviewView`，默认展示 6 个账号快照，可配置 3/6/9/12；全部账号继续位于 Providers 原生子菜单。
+- Provider 子菜单使用 `NativeMenuProviderCardView`，展示账号、来源、连接错误、Provider status、metrics、quota、reset 和 pace，并提供详细 popover、旧多 Provider popover、Usage Dashboard、Status Page、Authentication & Accounts、Refresh、Settings 等原生动作。
+- 菜单内 hosted rows 跟随系统明暗外观；旧多 Provider `DashboardViews` 继续固定深色，而单 Provider 详情已改为系统外观 popover。
+- `DashboardParser` 不再在模型层执行 metrics `prefix(4)` 或 quota `prefix(8)`；菜单预览前四项，详细 Provider 面板展示完整已解析数组。
+- `DashboardQuotaLane` 保留 `resetsAt/windowMinutes`，可计算 remaining、reserve、on pace、over pace 和预计提前耗尽时间。
+
+### 11.2 菜单栏与刷新灵活度
+
+- `MenuBarDisplayStyle`：meter、used percentage、remaining percentage、provider icon；所有样式在 incident/connection error 时显示注意标记。
+- `MenuQuotaPresentation`：菜单统一切换 used/remaining；账号名、summary metrics、reset/pace、service status、Overview 行数均可独立开关。
+- `RefreshMode`：Manual、Fixed、Adaptive。Adaptive 当前策略为 recent menu 2m、warm 5m、idle 15m、Low Power Mode 30m；`refreshOnMenuOpen` 默认开启且 60 秒内不会重复刷新。
+- 旧 `showPercentage` preference 保留兼容迁移，但新代码使用 `menuBarDisplayStyle`。
+
+### 11.3 账号认证和 Provider 设置
+
+- Settings 从顶部分段控件改为 General、Menu Bar、Notifications、Providers、Advanced 左侧导航，并增加 Provider 搜索。
+- Providers 的 Connection & service 区域直接观察共享 `DashboardStore`，显示已连接账号、source、plan、quota、错误和 status，不再只显示通用认证说明。
+- `CodexBarConfigStore` 能以不暴露 token 的 `ConfiguredProviderAccount` 列出 tokenAccounts，并支持切换 activeIndex、删除指定账号、保持未知字段和 0600 权限。
+- `CLIClient.activateConfiguredAccount` 使用 backup → mutate → validate → provider probe → rollback；删除使用 backup → mutate → validate → rollback。UI 删除前必须经 `NSAlert` 确认。
+- DeepSeek/Venice 的设置页显示 Saved token accounts，可新增（沿用 Save & Verify）、切换和删除。
+
+### 11.4 Provider 状态与本地通知
+
+- `ProviderServiceHealth` 把 Statuspage 风格的 none/minor/major/critical 和描述归一化为 operational/degraded/outage/unknown。
+- status 进入原生菜单 header/Overview/Provider card、旧 dashboard header/incident banner、status-item tooltip/accessibility。
+- `ProviderAlertController` 使用 `UNUserNotificationCenter`，支持服务异常、恢复和 quota 阈值；默认关闭，开启时请求系统权限。
+- alert 状态以 snapshot ID 隔离；首次刷新只记录 baseline，后续只在状态转移或阈值从下向上跨越时通知。quota 使用完整 parsed dashboard lanes 的最大值，不只看 primary/secondary/tertiary。
+
+### 11.5 本机编译和真实运行验证
+
+- 本机 Apple Swift 5.6.1 已对全部 `Sources/CodexBarMonterey/*.swift` 执行 macOS 12 typecheck，并直接链接 AppKit/SwiftUI/UserNotifications 分别生成 arm64 与 x86_64 可执行文件；两者已用 `lipo` 合成 Universal 2 主程序。仅有既存 AppKit protocol actor warning 和 `@preconcurrency` remark，无 type error。
+- `UpdaterController` 使用 `#if canImport(Sparkle)`：SwiftPM 正式构建继续链接 Sparkle；不解析 SwiftPM/Sparkle 的直接本地构建显示“手工更新”提示，从而可以独立验证 UI。本 fallback 不建立或声称建立安全更新链路。
+- 临时测试 bundle 复制了当前 `/Applications/CodexBar Monterey.app` 的真实 bundled helper，替换为本轮直接编译的 UI binary 并 ad-hoc 重签。普通启动后进程持续存活，系统日志没有 crash/runtime exception。
+- 该临时 bundle 的 helper 来自已安装应用，不是本轮重新从 `ENGINE_VERSION` 构建，因此它打印的 app/helper 版本和 65-provider registry 不能证明当前 vendor engine 构建结果；正式 CI 仍必须重新构建 pinned engine。源码认证 catalog 的独立审计结果为 66 explicit profiles。
+- 最终临时 bundle 的主程序、CodexBarCLI 和全部 Sparkle Mach-O 都包含 `x86_64 arm64`，`Scripts/check_macos12_compat.sh` 完整通过，主程序两 slice 的 `minos` 均为 12.0。`Scripts/smoke_test_app.sh` 的 bundle/codesign/architecture/deployment/registry 阶段均通过；最后 live provider probe 因沙箱网络返回 `Operation not permitted` 而退出 1，不能把它记成网络数据验证成功。
+- `CODEXBAR_MONTEREY_UI_SMOKE_OUTPUT=/private/tmp/...` 会在应用内等待真实 provider refresh、构建 Overview 和 Provider 原生菜单、检查 hosted row 尺寸、Providers 子菜单、认证动作、状态项 menu 与 Settings hierarchy，然后写一行结果并自动退出。本轮主体实现的真实运行结果：`PASS | snapshots=3 overviewItems=11`。随后只修改了 hosted-row smoke 尺寸断言、alert 最大 quota 取值、状态分类边界、SwiftUI binding 写法和文档；最终精确源码已重新 link 成功，但再次启动请求因外部执行额度限制被环境拒绝，不能把该拒绝写成代码运行失败，也不能声称精确末版完成了第二次 GUI 启动。
+- System Events 没有系统辅助功能授权，因此没有通过 AppleScript 模拟点击；应用内 smoke 检查的是同一 `populateOverviewMenu/populateProviderMenu` 生产路径，不是复制的测试实现。
+
+### 11.6 本轮验证基线
+
+- `python3 -B Scripts/test_ui_contract.py`
+- `python3 -B Scripts/test_release_contract.py`
+- `python3 -B Scripts/validate_provider_auth_catalog.py`（66 explicit providers）
+- `bash Scripts/test_provider_auth.sh`（包含多 token account 列出/切换/删除和 status classification）
+- `bash Scripts/test_cost_history_parser.sh`
+- `xcrun swiftc -typecheck -target arm64-apple-macosx12.0 ... Sources/CodexBarMonterey/*.swift`
+- 直接 arm64 AppKit/SwiftUI/UserNotifications link build
+- 直接 x86_64 link build、lipo Universal 2、临时 bundle macOS 12/codesign/全 Mach-O architecture validation
+- 临时 `.app` 普通启动 + 真实 helper 内置 UI runtime smoke PASS
+
+SwiftPM 6.2 tests、Universal 2、Sparkle framework、Intel slice 和最终 bundle smoke 仍必须由新版 Xcode/GitHub Actions 证明；本机 Swift 5.6 的成功不能替代这些门禁。用户本轮没有授权 push/tag/release，也没有要求覆盖 `/Applications` 中的现有安装，因此不得把临时测试 bundle 误记为正式安装或发布。
+
+### 11.7 2026-08-01 实机反馈修正
+
+- `ProviderSnapshot.headlineQuotaWindow` 为紧凑 UI 定义单一代表额度：z.ai 按 `windowMinutes == 300` 选择 5h 窗口，旧 payload 只回退到 `usage.primary`；MCP/月度即使百分比更高也不会抢占 Overview、状态项、tooltip、Provider 标题或 switcher 的主值。
+- z.ai Overview 会明确显示 `5h` 标签；完整 Provider 卡仍展示所有 quota，并把 5h lane 排在前面。通知阈值仍检查所有额度的最大值，避免遗漏 MCP/月度告警。
+- `ProviderDetailPopoverController` 以 transient `NSPopover` 锚定最近打开菜单的 `NSStatusBarButton`；详情使用系统明暗外观、完整 metrics/quota、刷新、网页 dashboard、状态页和设置入口，不再创建单独的浮动 `NSPanel`。
+- `DashboardHistoryContext` 区分 daily usage、hourly usage、daily estimated spend 和本地 5h quota samples。Codex/DeepSeek 等同时有 tokens/cost 时，上方柱图明确为 `Daily tokens`，下方折线明确为 `Daily cost`，各自独立缩放；只有一种序列时只画一张图，不再重复同一数据。
+- 本次反馈修正已通过 Swift 5.6 + macOS 12 arm64 全源码 typecheck、UI/release/provider-auth contract、cost history、z.ai 5h trend、local spend、66-provider catalog audit 和 `git diff --check`。
+- 精确末版已分别直接链接 arm64/x86_64 并合成临时包 `/private/tmp/codexbar-zai-popover.ekYC0y/CodexBar Monterey 5h Popover Test.app`；主程序及 bundle 内全部 Mach-O 均为 Universal 2，ad-hoc codesign、macOS 12 compatibility 和 offline smoke 通过。内置 UI runtime smoke 已实际 show/close provider detail popover，并返回 `PASS | snapshots=3 overviewItems=11`。该包仍复用已安装 App 的旧 helper/Sparkle，只适合本机 UI/交互验证，不等同于 CI 正式产物。
+
+### 11.8 v0.10.0 本机构建与发布要求
+
+- 新增 `Scripts/build_local_validation.sh`，把此前手工执行的 Swift 5.6 双架构 UI link、`lipo`、模板 bundle 复制、版本写入、ad-hoc 重签、macOS 12 检查和 offline smoke 固化为可重复入口；可选 `CODEXBAR_LOCAL_RUN_UI_SMOKE=1` 会运行真实菜单和详情 popover smoke。
+- `Scripts/install_local.sh` 现在接受任意已验签 App 的绝对路径；替换 `/Applications/CodexBar Monterey.app` 前先把旧 App 移到 `/private/tmp/codexbar-install-backup.*`，复制或验签失败会自动恢复。
+- 本地验证包只更新 UI 主程序，helper/Sparkle/Info 基础来自模板，不能作为 release provenance。完整 `v0.10.0` 仍必须经过分支 `build.yml`、main、tag `release.yml` 和 GitHub Release 资产存在性核验。
+- `Scripts/build_local_validation.sh` 已从精确工作树生成 `/private/tmp/codexbar-local-validation.hTvb8O/CodexBar Monterey.app`：显示版本 0.10.0、`x86_64 arm64`、ad-hoc codesign、macOS 12/offline smoke 和真实菜单/详情 popover runtime smoke 均通过，后者返回 `PASS | snapshots=3 overviewItems=11`。
+- 上述本地包已安装为 `/Applications/CodexBar Monterey.app` 并成功启动（验证时 PID 98661）；被替换的 0.1.0 App 可从 `/private/tmp/codexbar-install-backup.Irp3tx/CodexBar Monterey.app` 恢复。安装包仍继承模板 helper/Sparkle，不能误记为 GitHub Release 资产。
+- 用户明确要求发布 `v0.10.0`，本次不下载 GitHub Release 资产。最终 commit、Actions run 和 Release 状态须在完成后补记。

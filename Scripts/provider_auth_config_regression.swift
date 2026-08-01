@@ -55,6 +55,22 @@ _ = try store.save(
     providerID: "deepseek",
     profile: deepseek,
     input: input(secret: "sk-deepseek-test", label: "Primary"))
+_ = try store.save(
+    providerID: "deepseek",
+    profile: deepseek,
+    input: input(secret: "sk-deepseek-secondary", label: "Secondary"))
+var configuredAccounts = try store.configuredTokenAccounts(providerID: "deepseek")
+expect(configuredAccounts.map(\.label) == ["Primary", "Secondary"], "Token-account labels were not listed")
+expect(configuredAccounts.first(where: \.isActive)?.label == "Secondary", "Newest token account was not active")
+let primaryAccount = configuredAccounts.first(where: { $0.label == "Primary" })!
+try store.activateTokenAccount(providerID: "deepseek", accountID: primaryAccount.id)
+configuredAccounts = try store.configuredTokenAccounts(providerID: "deepseek")
+expect(configuredAccounts.first(where: \.isActive)?.label == "Primary", "Token-account activation failed")
+let secondaryAccount = configuredAccounts.first(where: { $0.label == "Secondary" })!
+try store.removeTokenAccount(providerID: "deepseek", accountID: secondaryAccount.id)
+configuredAccounts = try store.configuredTokenAccounts(providerID: "deepseek")
+expect(configuredAccounts.map(\.label) == ["Primary"], "Token-account removal changed the wrong account")
+expect(configuredAccounts[0].isActive, "Remaining token account was not made active")
 
 let openrouter = ProviderAuthenticationCatalog.profile(for: "openrouter")
 expect(openrouter.storage == .apiKey, "OpenRouter must use apiKey")
@@ -106,6 +122,16 @@ else {
 expect(first["token"] as? String == "sk-deepseek-test", "DeepSeek token not saved")
 expect(first["label"] as? String == "Primary", "DeepSeek label not saved")
 expect(accountsRoot["activeIndex"] as? Int == 0, "DeepSeek activeIndex incorrect")
+
+expect(
+    ProviderStatus(indicator: "none", description: "All Systems Operational", updatedAt: nil, url: nil).health == .operational,
+    "Operational provider status was misclassified")
+expect(
+    ProviderStatus(indicator: "minor", description: "Degraded performance", updatedAt: nil, url: nil).health == .degraded,
+    "Degraded provider status was misclassified")
+expect(
+    ProviderStatus(indicator: "critical", description: "Major outage", updatedAt: nil, url: nil).health == .outage,
+    "Outage provider status was misclassified")
 
 expect(provider("openrouter")["apiKey"] as? String == "sk-or-test", "OpenRouter apiKey missing")
 expect(provider("llmproxy")["enterpriseHost"] as? String == "https://proxy.example.com", "LLM Proxy host missing")

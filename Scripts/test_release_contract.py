@@ -15,6 +15,8 @@ smoke = (ROOT / "Scripts" / "smoke_test_app.sh").read_text()
 build_app = (ROOT / "Scripts" / "build_app.sh").read_text()
 build_engine = (ROOT / "Scripts" / "build_engine.sh").read_text()
 fetch_engine = (ROOT / "Scripts" / "fetch_engine.sh").read_text()
+local_validation = (ROOT / "Scripts" / "build_local_validation.sh").read_text()
+local_install = (ROOT / "Scripts" / "install_local.sh").read_text()
 
 # appcast.xml is a generated release artifact, but it must be trackable because
 # Sparkle clients read the copy published to origin/main.
@@ -62,5 +64,21 @@ assert 'Vendor/.engine-version' in build_engine
 assert 'Vendor/.source-fingerprint' in build_engine
 assert '"$VENDOR/.engine-version"' in fetch_engine
 assert '"$VENDOR/.source-fingerprint"' in fetch_engine
+
+# Swift 5.6-era Monterey machines can build the current UI shell directly for
+# both architectures by reusing a previously validated helper/framework bundle.
+# This is deliberately separate from the authoritative full engine build.
+for token in [
+    'CODEXBAR_LOCAL_TEMPLATE_APP',
+    '-target "$arch-apple-macosx12.0"',
+    'lipo -create',
+    'codesign --force --deep --sign -',
+    'CODEXBAR_SMOKE_OFFLINE=1',
+    'This bundle is ad-hoc signed and is not a release artifact.',
+]:
+    assert token in local_validation, token
+assert '"$ROOT/Scripts/build_engine.sh"' not in local_validation
+assert 'BACKUP_APP="$BACKUP_ROOT/CodexBar Monterey.app"' in local_install
+assert "restore_previous_app" in local_install
 
 print("Release contract tests passed.")

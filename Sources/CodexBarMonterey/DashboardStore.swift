@@ -17,6 +17,7 @@ final class DashboardStore: ObservableObject {
     var onOpenProviderDetails: ((String) -> Void)?
     var onQuit: (() -> Void)?
     var onRefreshStateChanged: (() -> Void)?
+    var onRefreshCompleted: (([ProviderSnapshot]) -> Void)?
 
     private var loadingProviders: [String: Int] = [:]
     private var supplementalJSONBySnapshot: [String: String] = [:]
@@ -102,6 +103,7 @@ final class DashboardStore: ObservableObject {
             }
             lastError = nil
             lastSuccessfulRefresh = Date()
+            onRefreshCompleted?(snapshots)
         } catch {
             lastError = error.localizedDescription
             NSLog("Dashboard refresh failed: %@", error.localizedDescription)

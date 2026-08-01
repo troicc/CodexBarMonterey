@@ -143,6 +143,51 @@ actor CLIClient {
         }
     }
 
+    func configuredAccounts(provider: String) throws -> [ConfiguredProviderAccount] {
+        try configStore.configuredTokenAccounts(providerID: provider)
+    }
+
+    func activateConfiguredAccount(
+        provider: String,
+        accountID: String,
+        profile: ProviderAuthenticationProfile
+    ) async throws {
+        let backup = try configStore.makeBackup()
+        do {
+            try configStore.activateTokenAccount(providerID: provider, accountID: accountID)
+            _ = try await run(
+                arguments: ["config", "validate", "--format", "json", "--pretty"],
+                timeout: 30)
+            _ = try await probeProvider(provider, profile: profile)
+        } catch {
+            do { try configStore.restore(backup) }
+            catch let rollbackError {
+                throw ClientError.rollbackFailed(
+                    operation: error.localizedDescription,
+                    rollback: rollbackError.localizedDescription)
+            }
+            throw ClientError.configurationRejected(error.localizedDescription)
+        }
+    }
+
+    func removeConfiguredAccount(provider: String, accountID: String) async throws {
+        let backup = try configStore.makeBackup()
+        do {
+            try configStore.removeTokenAccount(providerID: provider, accountID: accountID)
+            _ = try await run(
+                arguments: ["config", "validate", "--format", "json", "--pretty"],
+                timeout: 30)
+        } catch {
+            do { try configStore.restore(backup) }
+            catch let rollbackError {
+                throw ClientError.rollbackFailed(
+                    operation: error.localizedDescription,
+                    rollback: rollbackError.localizedDescription)
+            }
+            throw ClientError.configurationRejected(error.localizedDescription)
+        }
+    }
+
     func probeProvider(
         _ provider: String,
         profile: ProviderAuthenticationProfile

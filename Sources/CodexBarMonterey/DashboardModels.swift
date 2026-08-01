@@ -35,6 +35,66 @@ struct DashboardQuotaLane: Identifiable, Hashable {
     let title: String
     let usedPercent: Double
     let resetText: String?
+    let resetsAt: Date?
+    let windowMinutes: Double?
+
+    init(
+        id: String,
+        title: String,
+        usedPercent: Double,
+        resetText: String?,
+        resetsAt: Date? = nil,
+        windowMinutes: Double? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.usedPercent = max(0, min(100, usedPercent))
+        self.resetText = resetText
+        self.resetsAt = resetsAt
+        self.windowMinutes = windowMinutes
+    }
+
+    var remainingPercent: Double { max(0, 100 - usedPercent) }
+
+    /// Mirrors the useful part of upstream's pace display without relying on
+    /// newer macOS-only APIs. A window is on pace when consumption is no faster
+    /// than elapsed time; otherwise an estimated run-out is shown when possible.
+    func paceDescription(now: Date = Date()) -> String? {
+        guard let resetsAt = resetsAt,
+              let windowMinutes = windowMinutes,
+              windowMinutes > 0,
+              resetsAt > now
+        else { return nil }
+
+        if usedPercent >= 100 { return "Quota depleted" }
+        let duration = windowMinutes * 60
+        let startedAt = resetsAt.addingTimeInterval(-duration)
+        let elapsed = max(0, now.timeIntervalSince(startedAt))
+        guard elapsed > 60 else { return "Window just started" }
+
+        let expectedUsed = max(0, min(100, elapsed / duration * 100))
+        let reserve = expectedUsed - usedPercent
+        if reserve >= 5 {
+            return String(format: "%.0f%% reserve", reserve)
+        }
+
+        let rate = usedPercent / elapsed
+        if rate > 0 {
+            let secondsToEmpty = remainingPercent / rate
+            if now.addingTimeInterval(secondsToEmpty) < resetsAt {
+                return "Runs out in \(Self.compactDuration(secondsToEmpty))"
+            }
+        }
+        return reserve >= -5 ? "On pace" : String(format: "%.0f%% over pace", abs(reserve))
+    }
+
+    private static func compactDuration(_ interval: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .abbreviated
+        formatter.allowedUnits = interval >= 86_400 ? [.day, .hour] : [.hour, .minute]
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: max(60, interval)) ?? "soon"
+    }
 }
 
 struct DashboardHistorySummary: Hashable {
@@ -58,6 +118,15 @@ struct DashboardHistorySummary: Hashable {
         self.spendIsEstimated = spendIsEstimated
     }
 }
+
+enum DashboardHistoryContext: Hashable {
+    case dailyUsage
+    case hourlyUsage
+    case dailySpend
+    case fiveHourQuotaSamples
+    case generic
+}
+
 struct ProviderDashboard: Identifiable, Hashable {
     let id: String
     let title: String
@@ -67,9 +136,11 @@ struct ProviderDashboard: Identifiable, Hashable {
     let metrics: [DashboardMetric]
     let quotas: [DashboardQuotaLane]
     let history: [DashboardHistoryPoint]
+    let historyContext: DashboardHistoryContext
     let historySummary: DashboardHistorySummary?
     let topModel: String?
     let errorMessage: String?
+    let serviceStatus: ProviderStatus?
     let dashboardURL: URL?
     let statusURL: URL?
     static func loading(providerID: String, title: String) -> ProviderDashboard {
@@ -82,9 +153,11 @@ struct ProviderDashboard: Identifiable, Hashable {
             metrics: [],
             quotas: [],
             history: [],
+            historyContext: .generic,
             historySummary: nil,
             topModel: nil,
             errorMessage: nil,
+            serviceStatus: nil,
             dashboardURL: ProviderCatalog.dashboardURL(for: providerID),
             statusURL: ProviderCatalog.statusURL(for: providerID))
     }

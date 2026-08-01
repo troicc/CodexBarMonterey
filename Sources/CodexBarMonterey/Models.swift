@@ -111,6 +111,38 @@ struct ProviderSnapshot: Decodable, Hashable, Identifiable {
         return values.max()
     }
 
+    /// The single quota that should represent this provider in compact UI.
+    /// z.ai exposes both its main five-hour allowance and secondary MCP/monthly
+    /// windows. The main menu must not let a small MCP percentage replace the
+    /// five-hour value simply because it happens to be numerically larger.
+    var headlineQuotaWindow: RateWindow? {
+        guard provider != "deepseek" else { return nil }
+        let windows = [usage?.primary, usage?.secondary, usage?.tertiary].compactMap { $0 }
+        guard provider == "zai" else {
+            return windows.max {
+                ($0.usedPercent ?? -1) < ($1.usedPercent ?? -1)
+            }
+        }
+        if let fiveHour = windows.first(where: { window in
+            guard let minutes = window.windowMinutes else { return false }
+            return abs(minutes - 300) <= 1
+        }) {
+            return fiveHour
+        }
+        // Older engine payloads omit windowMinutes but put the main allowance
+        // in primary. Secondary is commonly MCP and is not a safe fallback.
+        return usage?.primary
+    }
+
+    var headlineUsedPercent: Double? {
+        headlineQuotaWindow?.usedPercent
+    }
+
+    var headlineQuotaLabel: String? {
+        guard provider == "zai", headlineQuotaWindow != nil else { return nil }
+        return "5h"
+    }
+
     var isFailed: Bool { error != nil }
 }
 
@@ -130,6 +162,73 @@ struct ProviderStatus: Decodable, Hashable {
     let description: String?
     let updatedAt: Date?
     let url: URL?
+}
+
+enum ProviderServiceHealth: Int, Hashable, Comparable {
+    case unknown = 0
+    case operational = 1
+    case degraded = 2
+    case outage = 3
+
+    static func < (lhs: ProviderServiceHealth, rhs: ProviderServiceHealth) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    var title: String {
+        switch self {
+        case .unknown: return "Status unavailable"
+        case .operational: return "Operational"
+        case .degraded: return "Degraded service"
+        case .outage: return "Service outage"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .unknown: return "questionmark.circle"
+        case .operational: return "checkmark.circle.fill"
+        case .degraded: return "exclamationmark.triangle.fill"
+        case .outage: return "xmark.octagon.fill"
+        }
+    }
+
+    var isIncident: Bool { self == .degraded || self == .outage }
+}
+
+extension ProviderStatus {
+    var health: ProviderServiceHealth {
+        let normalizedIndicator = indicator?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        if ["critical", "major"].contains(normalizedIndicator) { return .outage }
+        if ["minor", "degraded", "maintenance", "warning"].contains(normalizedIndicator) { return .degraded }
+        if ["none", "operational", "ok", "up"].contains(normalizedIndicator) { return .operational }
+
+        let normalized = [indicator, description]
+            .compactMap { $0?.lowercased() }
+            .joined(separator: " ")
+        guard !normalized.isEmpty else { return .unknown }
+        if ["critical", "major", "outage", "down", "unavailable"].contains(where: normalized.contains) {
+            return .outage
+        }
+        if ["minor", "degraded", "maintenance", "warning", "partial"].contains(where: normalized.contains) {
+            return .degraded
+        }
+        if ["operational", "available", "all systems"].contains(where: normalized.contains) {
+            return .operational
+        }
+        return .unknown
+    }
+
+    var displayText: String {
+        let trimmed = description?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? health.title : trimmed
+    }
+}
+
+extension ProviderSnapshot {
+    var serviceHealth: ProviderServiceHealth { status?.health ?? .unknown }
+    var hasVisibleAlert: Bool { error != nil || serviceHealth.isIncident }
 }
 
 struct UsageSnapshot: Decodable, Hashable {

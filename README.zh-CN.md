@@ -1,6 +1,6 @@
 # CodexBar Monterey Full
 
-这是面向 **macOS 12 Monterey** 的 CodexBar 兼容工程。目标不是只支持 Codex，而是保留上游 CodexBar 的完整 provider 数据引擎和自动更新能力，只替换无法在 Monterey 上运行的 macOS 14 UI 层。
+这是面向 **macOS 12 Monterey** 的 CodexBar 兼容工程。目标不是只支持 Codex，而是保留上游 CodexBar 的完整 provider 数据引擎和整包更新架构，只替换无法在 Monterey 上运行的 macOS 14 UI 层。安全自动更新是否可用仍取决于实际签名、密钥和 appcast 配置。
 
 当前固定的上游引擎版本见 `ENGINE_VERSION`。构建时会拉取该 tag 的 `CodexBarCore + CodexBarCLI`，因此 provider 列表、抓取器、解析器、认证来源、状态探针和配置结构都由上游维护，而不是在本项目里手工复制一份 provider 清单。
 
@@ -12,13 +12,16 @@
 - Web Cookie、CLI/RPC/PTY、OAuth、本地文件/数据库、API key、云凭据和状态页等上游数据来源。
 - 与上游相同的 provider 启用/禁用、配置文件和 API key 存储命令。
 - 浏览器 Cookie 刷新和缓存清理入口；刷新失败时由上游保证不覆盖原有有效缓存。
-- 合并菜单栏图标或每 provider 独立图标。
+- 合并菜单栏图标或每 provider 独立图标；状态项可显示 meter、已用百分比、剩余百分比或 provider 图标。
 - Session/weekly/extra quota、重置时间、credits、状态、账号、套餐和错误信息。
-- 紧凑的图形化 provider 总览与详情页；数据仍来自上游 CLI JSON，原始输出可直接通过内置 helper 查询。
-- macOS 原生应用菜单、右键菜单、真实的 ⌘R / ⌘, / ⌘Q、滚动详情和 VoiceOver 描述。
+- 紧凑的图形化 provider 总览，以及直接锚定菜单栏图标、跟随系统外观的详情 popover；数据仍来自上游 CLI JSON，原始输出可直接通过内置 helper 查询。
+- 默认左键直接打开 macOS 原生状态菜单；菜单内包含可配置 Overview、Provider/账号子菜单、指标、额度、重置时间、pace 和服务状态。z.ai 的紧凑主值明确优先显示 5h 额度，MCP/月度窗口仍保留在完整详情中。
+- 详情历史图分别标明 tokens、cost、requests 或 5h quota；有两类数据时使用独立图表和刻度，不再用柱图、折线重复表达同一序列。
+- Manual、固定间隔和 Adaptive 刷新模式、打开菜单刷新、服务故障/恢复与额度阈值通知。
+- macOS 原生应用菜单、真实的 ⌘R / ⌘, / ⌘Q、滚动详情和 VoiceOver 描述。
 - 账户隔离的本地 quota/余额差历史；无法可靠归属的长间隔不会冒充当天消费。
 - Claude、Codex、Cursor 等上游支持的 cost 详情。
-- Sparkle 2.9.4 整包自动更新：AppKit shell、`CodexBarCLI`、Sparkle.framework 同步替换，不会出现 UI 与 provider 引擎版本错配。
+- Sparkle 2.9.4 整包更新集成；真正可工作的安全自动更新仍要求仓库配置真实密钥和签名 appcast。
 - Universal 2：Intel 与 Apple Silicon。
 - LaunchAgent 登录启动，避免依赖 macOS 13 的 `SMAppService`。
 - 每日检查 CodexBar 上游 release，自动创建升级 PR。
@@ -27,9 +30,9 @@
 
 - 原版 SwiftUI 设置页、confetti、全部专属动画和每个 provider 的专属登录视图没有逐像素搬运。
 - WidgetKit 桌面小组件不移植；它属于新系统 target，不是 macOS 12 可实现的同等功能。
-- 某些 provider 的复杂账户管理或设备流仍需按上游文档在相应 CLI、浏览器或配置文件中完成。数据抓取能力保留，但并非所有专属登录 UI 都在这个 AppKit shell 内重做。
+- DeepSeek/Venice 的多 Token 账号可在 App 内新增、验证、切换和删除；某些 provider 的复杂 organization、设备流或专属 OAuth 仍需按上游文档在相应 CLI、浏览器或配置文件中完成。
 
-换句话说：**全部 provider 数据能力与自动更新是核心兼容目标；新系统专属视觉组件不是。**
+换句话说：**全部 provider 数据能力与整包更新架构是核心兼容目标；签名更新链路需要单独配置，新系统专属视觉组件也不在兼容承诺内。**
 
 ## 架构
 
@@ -156,6 +159,13 @@ git push origin v0.7.1
 - `Clear browser cache` 只清理选定 provider 的缓存；
 - `Open config file` 打开上游共用配置；
 - `Provider docs` 打开上游文档。
+- `Connection & service` 显示当前账号、来源、套餐、额度和服务状态；Token Account provider 还可直接切换或删除已保存账号。
+
+在 **Settings → General / Menu Bar / Notifications** 中还可以选择：
+
+- Manual、固定间隔或 Adaptive 刷新，以及是否打开菜单时刷新；
+- 合并/分离图标、状态项样式、已用/剩余额度、Overview 行数、账号名、指标、重置时间和服务状态；
+- 服务降级/恢复通知、额度阈值通知和阈值百分比。
 
 配置路径：
 
@@ -216,6 +226,42 @@ python3 Scripts/test_release_contract.py
 Scripts/test_cost_history_parser.sh
 Scripts/test_provider_auth.sh
 ```
+
+### Swift 5.6 本机直接生成临时验证 App
+
+已经安装过一个可用 CodexBar Monterey 时，可以不解析 SwiftPM 6.2 manifest，直接把当前工作树的 AppKit/SwiftUI UI shell 分别编译为 `arm64`、`x86_64`，再合并为 Universal 2：
+
+```bash
+CODEXBAR_LOCAL_TEMPLATE_APP="/Applications/CodexBar Monterey.app" \
+CODEXBAR_LOCAL_DISPLAY_NAME="CodexBar Monterey Local Validation" \
+CODEXBAR_LOCAL_VERSION="0.10.0" \
+Scripts/build_local_validation.sh
+```
+
+脚本会自动：
+
+1. 为两种架构直接编译当前 `Sources/CodexBarMonterey/*.swift`；
+2. 从模板 App 复制 `CodexBarCLI`、Sparkle framework、Info.plist 和资源；
+3. 替换 UI 主程序、更新本地显示版本并执行 ad-hoc 签名；
+4. 检查全部 Mach-O 的 Universal 2 架构、macOS 12 deployment target、签名和离线 provider registry。
+
+如需让应用自动打开真实菜单、构建 Provider 菜单并实际 show/close 详情 popover 后退出，先关闭正在运行的 CodexBar，再增加：
+
+```bash
+CODEXBAR_LOCAL_RUN_UI_SMOKE=1 \
+CODEXBAR_LOCAL_VERSION="0.10.0" \
+Scripts/build_local_validation.sh
+```
+
+接受该验证包后，可把脚本最后输出的绝对路径传给安全安装器：
+
+```bash
+Scripts/install_local.sh "/private/tmp/.../CodexBar Monterey Local Validation.app"
+```
+
+安装器会先停止旧进程，把原 `/Applications/CodexBar Monterey.app` 移到独立的 `/private/tmp/codexbar-install-backup.*` 目录，再复制、验签并启动新 App；安装或验签失败时会自动恢复旧 App。
+
+这个路径只用于快速验证当前 UI 和交互，不能冒充正式 Release：`CodexBarCLI` 与 Sparkle 来自模板 App，直接编译的主程序走无 Sparkle fallback，签名是 ad-hoc，而且不会重新构建 `ENGINE_VERSION` 对应的 provider engine。正式可信结果仍以 GitHub Actions 或 Swift 6.2 完整本地构建为准。
 
 使用 Swift 6.2 的完整本地构建：
 

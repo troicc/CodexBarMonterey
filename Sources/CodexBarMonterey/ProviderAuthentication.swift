@@ -32,6 +32,25 @@ struct ProviderAuthenticationProfile: Hashable {
     var canSaveConfiguration: Bool {
         storage != .external
     }
+
+    var methodTitle: String {
+        switch storage {
+        case .apiKey: return "API key"
+        case .tokenAccount: return "Multiple token accounts"
+        case .manualCookie: return "Browser session or cookie"
+        case .providerFields: return "Provider fields"
+        case .external: return title
+        }
+    }
+
+    var methodSymbol: String {
+        switch storage {
+        case .apiKey, .tokenAccount: return "key.fill"
+        case .manualCookie: return "globe"
+        case .providerFields: return "slider.horizontal.3"
+        case .external: return "person.badge.key"
+        }
+    }
 }
 
 enum ProviderAuthenticationCatalog {

@@ -7,6 +7,8 @@ enum CodexBarConfigStoreError: LocalizedError {
     case missingField(String)
     case noConfigurationValues
     case invalidXDGPath(String)
+    case providerNotConfigured(String)
+    case accountNotFound(String)
 
     var errorDescription: String? {
         switch self {
@@ -22,8 +24,18 @@ enum CodexBarConfigStoreError: LocalizedError {
             return "Enter at least one provider configuration value."
         case let .invalidXDGPath(path):
             return "XDG_CONFIG_HOME must be an absolute path; received \(path)."
+        case let .providerNotConfigured(provider):
+            return "\(ProviderCatalog.displayName(for: provider)) has no token-account configuration."
+        case let .accountNotFound(label):
+            return "The configured account \(label) could not be found."
         }
     }
+}
+
+struct ConfiguredProviderAccount: Hashable, Identifiable {
+    let id: String
+    let label: String
+    let isActive: Bool
 }
 
 struct CodexBarConfigBackup {
@@ -175,6 +187,78 @@ final class CodexBarConfigStore {
         return CredentialSaveReceipt(configURL: url)
     }
 
+    func configuredTokenAccounts(providerID: String) throws -> [ConfiguredProviderAccount] {
+        let url = try resolvedConfigURL()
+        let root = try readRoot(from: url)
+        guard let providers = root["providers"] as? [[String: Any]],
+              let provider = providers.first(where: { ($0["id"] as? String) == providerID }),
+              let container = provider["tokenAccounts"] as? [String: Any]
+        else { return [] }
+
+        let accounts = container["accounts"] as? [[String: Any]] ?? []
+        let activeIndex = (container["activeIndex"] as? NSNumber)?.intValue ?? 0
+        return accounts.enumerated().map { index, account in
+            ConfiguredProviderAccount(
+                id: accountIdentifier(account, index: index),
+                label: ((account["label"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .flatMap { $0.isEmpty ? nil : $0 } ?? "Account \(index + 1)",
+                isActive: index == activeIndex)
+        }
+    }
+
+    func activateTokenAccount(providerID: String, accountID: String) throws {
+        try updateTokenAccounts(providerID: providerID) { container, accounts in
+            guard let index = accounts.enumerated().first(where: {
+                self.accountIdentifier($0.element, index: $0.offset) == accountID
+            })?.offset else {
+                throw CodexBarConfigStoreError.accountNotFound(accountID)
+            }
+            container["activeIndex"] = index
+            accounts[index]["lastUsed"] = Int(Date().timeIntervalSince1970)
+        }
+    }
+
+    func removeTokenAccount(providerID: String, accountID: String) throws {
+        try updateTokenAccounts(providerID: providerID) { container, accounts in
+            guard let index = accounts.enumerated().first(where: {
+                self.accountIdentifier($0.element, index: $0.offset) == accountID
+            })?.offset else {
+                throw CodexBarConfigStoreError.accountNotFound(accountID)
+            }
+            let activeIndex = (container["activeIndex"] as? NSNumber)?.intValue ?? 0
+            accounts.remove(at: index)
+            if !accounts.isEmpty {
+                let adjusted = index < activeIndex ? activeIndex - 1 : activeIndex
+                container["activeIndex"] = max(0, min(accounts.count - 1, adjusted))
+            }
+        }
+    }
+
+    private func updateTokenAccounts(
+        providerID: String,
+        mutation: (inout [String: Any], inout [[String: Any]]) throws -> Void
+    ) throws {
+        let url = try ensureConfigFile()
+        var root = try readRoot(from: url)
+        var providers = root["providers"] as? [[String: Any]] ?? []
+        guard let providerIndex = providers.firstIndex(where: { ($0["id"] as? String) == providerID }),
+              var container = providers[providerIndex]["tokenAccounts"] as? [String: Any]
+        else {
+            throw CodexBarConfigStoreError.providerNotConfigured(providerID)
+        }
+        var accounts = container["accounts"] as? [[String: Any]] ?? []
+        try mutation(&container, &accounts)
+        if accounts.isEmpty {
+            providers[providerIndex].removeValue(forKey: "tokenAccounts")
+        } else {
+            container["version"] = (container["version"] as? Int) ?? 1
+            container["accounts"] = accounts
+            providers[providerIndex]["tokenAccounts"] = container
+        }
+        root["providers"] = providers
+        try write(root: root, to: url)
+    }
+
     private func applyOptionalFields(
         profile: ProviderAuthenticationProfile,
         input: ProviderCredentialInput,
@@ -275,6 +359,11 @@ final class CodexBarConfigStore {
         container["activeIndex"] = accountIndex
         container["accounts"] = accounts
         return container
+    }
+
+    private func accountIdentifier(_ account: [String: Any], index: Int) -> String {
+        let identifier = (account["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return identifier.isEmpty ? "legacy-\(index)" : identifier
     }
 
     private func normalizedManualCredential(_ value: String) -> String {

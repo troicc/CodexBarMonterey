@@ -128,6 +128,11 @@ struct DashboardPopoverView: View {
                             retry: { Task { await store.refresh() } })
                     }
                     ProviderHeaderView(snapshot: snapshot, dashboard: dashboard)
+                    if let status = dashboard.serviceStatus, status.health.isIncident {
+                        ServiceStatusBanner(status: status) {
+                            store.openStatusURL()
+                        }
+                    }
                     if let error = dashboard.errorMessage {
                         ErrorCard(message: error, providerID: dashboard.id) {
                             store.onOpenSettings?()
@@ -276,7 +281,7 @@ private struct ProviderSwitcherButton: View {
                     }
                 }
                 SwitcherUsageBar(
-                    percent: snapshot.provider == "deepseek" ? nil : snapshot.maximumUsedPercent,
+                    percent: snapshot.headlineUsedPercent,
                     color: ProviderBrand.color(for: snapshot.provider))
             }
             .foregroundColor(.white.opacity(0.78))
@@ -303,10 +308,11 @@ private struct ProviderSwitcherButton: View {
         if snapshot.provider == "deepseek" {
             return "Usage details available"
         }
-        guard let percent = snapshot.maximumUsedPercent else {
+        guard let percent = snapshot.headlineUsedPercent else {
             return "Usage unavailable"
         }
-        return String(format: "%.0f percent used", max(0, min(100, percent)))
+        let label = snapshot.headlineQuotaLabel.map { "\($0) " } ?? ""
+        return label + String(format: "%.0f percent used", max(0, min(100, percent)))
     }
 }
 
@@ -353,6 +359,15 @@ private struct ProviderHeaderView: View {
                             .padding(.vertical, 2)
                             .background(Capsule().fill(Color.white.opacity(0.10)))
                     }
+                    if let status = dashboard.serviceStatus,
+                       status.health != .unknown
+                    {
+                        Image(systemName: status.health.symbolName)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(serviceHealthColor(status.health))
+                            .help(status.displayText)
+                            .accessibilityLabel(Text(status.displayText))
+                    }
                 }
                 HStack(spacing: 5) {
                     if let account = snapshot.accountDisplayName {
@@ -371,6 +386,38 @@ private struct ProviderHeaderView: View {
                     .foregroundColor(.white.opacity(0.65))
             }
         }
+    }
+}
+
+private struct ServiceStatusBanner: View {
+    let status: ProviderStatus
+    let openStatusPage: () -> Void
+
+    var body: some View {
+        Button(action: openStatusPage) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: status.health.symbolName)
+                    .foregroundColor(serviceHealthColor(status.health))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status.health.title)
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(status.displayText)
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.66))
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 10))
+                    .foregroundColor(.white.opacity(0.54))
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 9).fill(serviceHealthColor(status.health).opacity(0.12)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(serviceHealthColor(status.health).opacity(0.30), lineWidth: 1))
+        }
+        .buttonStyle(PlainButtonStyle())
+        .accessibilityLabel(Text("\(status.health.title). \(status.displayText)"))
+        .accessibilityHint(Text("Opens the provider status page"))
     }
 }
 
@@ -413,10 +460,15 @@ struct DashboardSummaryCard: View {
                         .foregroundColor(.white.opacity(0.70))
                 } else {
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], alignment: .leading, spacing: 12) {
-                        ForEach(dashboard.metrics) { metric in
+                        ForEach(Array(dashboard.metrics.prefix(4))) { metric in
                             MetricView(metric: metric)
                         }
                     }
+                }
+                if dashboard.metrics.count > 4 {
+                    Text("\(dashboard.metrics.count - 4) more metrics in detailed view")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.white.opacity(0.58))
                 }
                 if !dashboard.history.isEmpty {
                     MiniHistoryChart(
@@ -523,6 +575,14 @@ struct QuotaLaneView: View {
                     Text(reset)
                         .font(.system(size: 10))
                         .foregroundColor(.white.opacity(0.46))
+                    Spacer()
+                }
+            }
+            if let pace = lane.paceDescription() {
+                HStack {
+                    Text(pace)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(pace.hasPrefix("Runs out") || pace.contains("over pace") ? .yellow : .white.opacity(0.55))
                     Spacer()
                 }
             }
@@ -657,28 +717,30 @@ private struct QuotaBarChart: View {
     }
 }
 
-struct LiveProviderDetailPanelView: View {
+struct LiveProviderDetailPopoverView: View {
     @ObservedObject var store: DashboardStore
     let snapshotID: String
 
     var body: some View {
         Group {
             if let snapshot = store.snapshots.first(where: { $0.id == snapshotID }) {
-                ProviderDetailPanelView(dashboard: store.dashboard(for: snapshot))
+                ProviderDetailPopoverView(
+                    dashboard: store.dashboard(for: snapshot),
+                    isRefreshing: store.isRefreshing,
+                    refresh: { Task { await store.refresh() } },
+                    openDashboard: { store.openDashboardURL() },
+                    openStatus: { store.openStatusURL() },
+                    openSettings: { store.onOpenSettings?() })
             } else {
-                ZStack {
-                    VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-                        .ignoresSafeArea()
-                    VStack(spacing: 10) {
-                        Image(systemName: "person.crop.circle.badge.xmark")
-                            .font(.system(size: 30))
-                        Text("This provider account is no longer enabled.")
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    .foregroundColor(.secondary)
+                VStack(spacing: 10) {
+                    Image(systemName: "person.crop.circle.badge.xmark")
+                        .font(.system(size: 30))
+                    Text("This provider account is no longer enabled.")
+                        .font(.system(size: 13, weight: .medium))
                 }
-                .frame(width: DashboardTheme.detailWidth, height: DashboardTheme.detailHeight)
-                .preferredColorScheme(.dark)
+                .foregroundColor(.secondary)
+                .frame(width: 390, height: 560)
+                .background(Color(nsColor: NSColor.windowBackgroundColor))
             }
         }
         .task {
@@ -688,123 +750,472 @@ struct LiveProviderDetailPanelView: View {
     }
 }
 
-struct ProviderDetailPanelView: View {
+struct ProviderDetailPopoverView: View {
     let dashboard: ProviderDashboard
+    let isRefreshing: Bool
+    let refresh: () -> Void
+    let openDashboard: () -> Void
+    let openStatus: () -> Void
+    let openSettings: () -> Void
+
+    private let columns = [GridItem(.flexible()), GridItem(.flexible())]
 
     var body: some View {
-        ZStack {
-            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-                .ignoresSafeArea()
-            LinearGradient(
-                gradient: Gradient(colors: [DashboardTheme.backgroundTop, DashboardTheme.backgroundBottom]),
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing)
-                .opacity(0.94)
-                .ignoresSafeArea()
+        VStack(spacing: 0) {
+            header
+            Divider()
             ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(dashboard.title)
-                                .font(.system(size: 17, weight: .bold))
-                            Text(dashboard.updatedText)
-                                .font(.system(size: 11))
-                                .foregroundColor(.white.opacity(0.5))
-                            if let account = dashboard.accountLabel {
-                                Text(account)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundColor(.white.opacity(0.68))
-                                    .lineLimit(1)
-                            }
-                        }
-                        Spacer()
-                        Image(systemName: ProviderBrand.symbol(for: dashboard.id))
-                            .font(.system(size: 21, weight: .semibold))
-                            .foregroundColor(ProviderBrand.color(for: dashboard.id))
-                    }
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 7) {
-                        ForEach(dashboard.metrics) { metric in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(metric.title)
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(.white.opacity(0.52))
-                                Text(metric.value)
-                                    .font(.system(size: 16, weight: .bold))
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.7)
-                                if let subtitle = metric.subtitle {
-                                    Text(subtitle)
-                                        .font(.system(size: 9))
-                                        .foregroundColor(.white.opacity(0.46))
-                                        .lineLimit(2)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.05)))
-                        }
-                    }
-                    if !dashboard.history.isEmpty {
-                        if dashboard.id == "zai" {
-                            Text("Hourly token usage")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.58))
-                        }
-                        DetailedHistoryChart(points: dashboard.history, providerID: dashboard.id)
-                            .frame(height: 210)
-                    } else {
-                        VStack(spacing: 10) {
-                            ForEach(dashboard.quotas) { lane in
-                                QuotaLaneView(lane: lane, color: ProviderBrand.color(for: dashboard.id))
-                            }
-                        }
-                    }
+                VStack(alignment: .leading, spacing: 16) {
+                    statusContent
+                    metricsContent
+                    quotaContent
+                    historyContent
                     if let topModel = dashboard.topModel {
-                        Text("Top model: \(topModel)")
+                        Label("Top model: \(topModel)", systemImage: "sparkles")
                             .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white.opacity(0.58))
+                            .foregroundColor(.secondary)
                             .lineLimit(1)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
                 .padding(14)
             }
+            Divider()
+            actionBar
         }
-        .frame(width: DashboardTheme.detailWidth, height: DashboardTheme.detailHeight)
-        .preferredColorScheme(.dark)
+        .frame(width: 390, height: 560)
+        .background(Color(nsColor: NSColor.windowBackgroundColor))
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(ProviderBrand.color(for: dashboard.id).opacity(0.14))
+                Image(systemName: ProviderBrand.symbol(for: dashboard.id))
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundColor(ProviderBrand.color(for: dashboard.id))
+            }
+            .frame(width: 36, height: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dashboard.title)
+                    .font(.system(size: 15, weight: .semibold))
+                if let account = dashboard.accountLabel {
+                    Text(account)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Text(dashboard.updatedText)
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel(Text("Refreshing provider usage"))
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
+
+    @ViewBuilder
+    private var statusContent: some View {
+        if let status = dashboard.serviceStatus, status.health != .unknown {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: status.health.symbolName)
+                    .foregroundColor(serviceHealthColor(status.health))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status.health.title)
+                        .font(.system(size: 11, weight: .semibold))
+                    if status.health.isIncident {
+                        Text(status.displayText)
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .padding(9)
+            .background(RoundedRectangle(cornerRadius: 8).fill(serviceHealthColor(status.health).opacity(0.10)))
+        }
+        if let error = dashboard.errorMessage {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text(error)
+                    .font(.system(size: 10, weight: .medium))
+                Spacer()
+            }
+            .padding(9)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.10)))
+        }
+    }
+
+    @ViewBuilder
+    private var metricsContent: some View {
+        if !dashboard.metrics.isEmpty {
+            ProviderDetailSectionTitle(title: "Summary", symbol: "rectangle.grid.2x2")
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+                ForEach(dashboard.metrics) { metric in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(metric.title)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.secondary)
+                        Text(metric.value)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.65)
+                        if let subtitle = metric.subtitle {
+                            Text(subtitle)
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(Color(nsColor: NSColor.controlBackgroundColor)))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9)
+                            .stroke(Color.primary.opacity(0.07), lineWidth: 1))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var quotaContent: some View {
+        if !dashboard.quotas.isEmpty {
+            ProviderDetailSectionTitle(title: "Quotas", symbol: "gauge")
+            VStack(spacing: 10) {
+                ForEach(dashboard.quotas) { lane in
+                    ProviderDetailQuotaRow(
+                        lane: lane,
+                        color: ProviderBrand.color(for: dashboard.id))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var historyContent: some View {
+        let series = dashboardHistorySeries(for: dashboard)
+        if !series.isEmpty {
+            ProviderDetailSectionTitle(title: "History", symbol: "chart.xyaxis.line")
+            Text("Each chart is labeled and scaled independently.")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+            VStack(spacing: 14) {
+                ForEach(series) { item in
+                    ProviderHistorySeriesView(series: item)
+                }
+            }
+        }
+    }
+
+    private var actionBar: some View {
+        HStack(spacing: 12) {
+            Button(action: refresh) {
+                Label(isRefreshing ? "Refreshing…" : "Refresh", systemImage: "arrow.clockwise")
+            }
+            .disabled(isRefreshing)
+            Button(action: openDashboard) {
+                Label("Web dashboard", systemImage: "arrow.up.right.square")
+            }
+            .disabled(dashboard.dashboardURL == nil)
+            Spacer()
+            if dashboard.statusURL != nil {
+                Button(action: openStatus) {
+                    Image(systemName: "waveform.path.ecg")
+                }
+                .help("Open status page")
+            }
+            Button(action: openSettings) {
+                Image(systemName: "gearshape")
+            }
+            .help("Open provider settings")
+        }
+        .font(.system(size: 11, weight: .medium))
+        .buttonStyle(BorderlessButtonStyle())
+        .padding(.horizontal, 14)
+        .frame(height: 42)
     }
 }
 
-private struct DetailedHistoryChart: View {
-    let points: [DashboardHistoryPoint]
-    let providerID: String
+private struct ProviderDetailSectionTitle: View {
+    let title: String
+    let symbol: String
 
-
-    private var values: [Double] {
-        resolvedHistoryValues(points)
-    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            MiniHistoryChart(
-                points: points,
-                color: ProviderBrand.color(for: providerID),
-                fixedMaximum: nil)
-                .frame(height: 102)
-            LineHistoryChart(
-                values: values,
-                color: ProviderBrand.color(for: providerID),
-                fixedMaximum: nil)
-                .frame(height: 72)
+        Label(title, systemImage: symbol)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.secondary)
+    }
+}
+
+private struct ProviderDetailQuotaRow: View {
+    let lane: DashboardQuotaLane
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
             HStack {
-                Text(points.first?.label ?? "")
+                Text(lane.title)
+                    .font(.system(size: 11, weight: .medium))
                 Spacer()
-                Text(points.last?.label ?? "")
+                Text(String(format: "%.0f%% used · %.0f%% left", lane.usedPercent, lane.remainingPercent))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.secondary)
             }
-            .font(.system(size: 9))
-            .foregroundColor(.white.opacity(0.38))
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.15))
+                    Capsule()
+                        .fill(color)
+                        .frame(width: geometry.size.width * CGFloat(lane.usedPercent / 100))
+                }
+            }
+            .frame(height: 6)
+            let details = [lane.resetText, lane.paceDescription()].compactMap { $0 }
+            if !details.isEmpty {
+                Text(details.joined(separator: " · "))
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(Color(nsColor: NSColor.controlBackgroundColor)))
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(Text(String(format: "%.0f percent used", lane.usedPercent)))
+    }
+}
+
+private enum ProviderHistoryChartStyle {
+    case bars
+    case line
+}
+
+private enum ProviderHistoryValueKind {
+    case tokens
+    case spend
+    case requests
+    case percentage
+}
+
+private struct ProviderHistorySeries: Identifiable {
+    let id: String
+    let title: String
+    let values: [Double]
+    let firstLabel: String
+    let lastLabel: String
+    let style: ProviderHistoryChartStyle
+    let kind: ProviderHistoryValueKind
+    let currencyCode: String?
+    let color: Color
+    let fixedMaximum: Double?
+
+    var latestText: String {
+        guard let value = values.last else { return "—" }
+        switch kind {
+        case .tokens, .requests:
+            return compactNumber(value)
+        case .spend:
+            return currencyNumber(value, code: currencyCode)
+        case .percentage:
+            return String(format: "%.0f%%", value)
         }
     }
+}
+
+private struct ProviderHistorySeriesView: View {
+    let series: ProviderHistorySeries
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(series.title)
+                    .font(.system(size: 11, weight: .semibold))
+                Spacer()
+                Text("Latest \(series.latestText)")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            Group {
+                switch series.style {
+                case .bars:
+                    ProviderHistoryBarChart(
+                        values: series.values,
+                        color: series.color,
+                        fixedMaximum: series.fixedMaximum)
+                case .line:
+                    LineHistoryChart(
+                        values: series.values,
+                        color: series.color,
+                        fixedMaximum: series.fixedMaximum)
+                }
+            }
+            .frame(height: 74)
+            HStack {
+                Text(series.firstLabel)
+                Spacer()
+                Text(series.lastLabel)
+            }
+            .font(.system(size: 9))
+            .foregroundColor(.secondary)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(Color(nsColor: NSColor.controlBackgroundColor)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(Color.primary.opacity(0.07), lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(series.title))
+        .accessibilityValue(Text("Latest \(series.latestText)"))
+    }
+}
+
+private struct ProviderHistoryBarChart: View {
+    let values: [Double]
+    let color: Color
+    let fixedMaximum: Double?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let maximum = max(fixedMaximum ?? values.max() ?? 1, 1)
+            HStack(alignment: .bottom, spacing: max(2, geometry.size.width / CGFloat(max(values.count, 1)) * 0.22)) {
+                ForEach(Array(values.enumerated()), id: \.offset) { _, value in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(color.opacity(0.82))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: max(2, geometry.size.height * CGFloat(max(0, value) / maximum)))
+                }
+            }
+        }
+    }
+}
+
+private func dashboardHistorySeries(for dashboard: ProviderDashboard) -> [ProviderHistorySeries] {
+    let tokens = dashboard.history.map { max(0, $0.tokens ?? 0) }
+    let spend = dashboard.history.map { max(0, $0.spend ?? 0) }
+    let requests = dashboard.history.map { max(0, $0.requests ?? 0) }
+    let firstLabel = dashboard.history.first?.label ?? ""
+    let lastLabel = dashboard.history.last?.label ?? ""
+    let providerColor = ProviderBrand.color(for: dashboard.id)
+    let currency = dashboard.historySummary?.currencyCode
+    var result: [ProviderHistorySeries] = []
+
+    func hasValues(_ values: [Double]) -> Bool {
+        values.contains(where: { $0 > 0 })
+    }
+
+    func append(
+        id: String,
+        title: String,
+        values: [Double],
+        style: ProviderHistoryChartStyle,
+        kind: ProviderHistoryValueKind,
+        color: Color,
+        fixedMaximum: Double? = nil
+    ) {
+        guard hasValues(values) else { return }
+        result.append(ProviderHistorySeries(
+            id: id,
+            title: title,
+            values: values,
+            firstLabel: firstLabel,
+            lastLabel: lastLabel,
+            style: style,
+            kind: kind,
+            currencyCode: currency,
+            color: color,
+            fixedMaximum: fixedMaximum))
+    }
+
+    switch dashboard.historyContext {
+    case .dailyUsage:
+        append(
+            id: "daily-tokens",
+            title: "Daily tokens",
+            values: tokens,
+            style: .bars,
+            kind: .tokens,
+            color: providerColor)
+        append(
+            id: "daily-cost",
+            title: "Daily cost",
+            values: spend,
+            style: .line,
+            kind: .spend,
+            color: .green)
+        if result.count < 2 {
+            append(
+                id: "daily-requests",
+                title: "Daily requests",
+                values: requests,
+                style: .line,
+                kind: .requests,
+                color: .orange)
+        }
+    case .hourlyUsage:
+        append(
+            id: "hourly-tokens",
+            title: "Hourly tokens",
+            values: tokens,
+            style: .bars,
+            kind: .tokens,
+            color: providerColor)
+    case .dailySpend:
+        append(
+            id: "daily-estimated-spend",
+            title: "Daily estimated spend",
+            values: spend,
+            style: .bars,
+            kind: .spend,
+            color: .green)
+    case .fiveHourQuotaSamples:
+        append(
+            id: "five-hour-quota",
+            title: "5h quota used",
+            values: tokens,
+            style: .line,
+            kind: .percentage,
+            color: providerColor,
+            fixedMaximum: 100)
+    case .generic:
+        append(
+            id: "tokens",
+            title: "Tokens",
+            values: tokens,
+            style: .bars,
+            kind: .tokens,
+            color: providerColor)
+        append(
+            id: "cost",
+            title: "Cost",
+            values: spend,
+            style: .line,
+            kind: .spend,
+            color: .green)
+        if result.count < 2 {
+            append(
+                id: "requests",
+                title: "Requests",
+                values: requests,
+                style: .line,
+                kind: .requests,
+                color: .orange)
+        }
+    }
+    return Array(result.prefix(2))
 }
 
 private struct LineHistoryChart: View {
@@ -916,16 +1327,6 @@ private struct CompactProminentButtonStyle: ButtonStyle {
     }
 }
 
-private func resolvedHistoryValues(_ points: [DashboardHistoryPoint]) -> [Double] {
-    if points.contains(where: { ($0.spend ?? 0) > 0 }) {
-        return points.map { $0.spend ?? 0 }
-    }
-    if points.contains(where: { ($0.tokens ?? 0) > 0 }) {
-        return points.map { $0.tokens ?? 0 }
-    }
-    return points.map { $0.requests ?? 0 }
-}
-
 private func currencyNumber(_ value: Double, code: String?) -> String {
     guard let rawCode = code?.uppercased(), rawCode.count == 3 else {
         return String(format: "%.2f", value)
@@ -944,4 +1345,13 @@ private func compactNumber(_ value: Double) -> String {
     if absolute >= 1_000_000 { return String(format: "%.1fM", value / 1_000_000) }
     if absolute >= 1_000 { return String(format: "%.1fK", value / 1_000) }
     return String(format: "%.0f", value)
+}
+
+private func serviceHealthColor(_ health: ProviderServiceHealth) -> Color {
+    switch health {
+    case .unknown: return .secondary
+    case .operational: return .green
+    case .degraded: return .orange
+    case .outage: return .red
+    }
 }

@@ -1,3 +1,4 @@
+#if canImport(Sparkle)
 @preconcurrency import Sparkle
 
 @MainActor
@@ -22,3 +23,24 @@ final class UpdaterController {
         controller.updater.automaticallyDownloadsUpdates = enabled
     }
 }
+#else
+@preconcurrency import AppKit
+
+/// Direct local builds can run without resolving Sparkle. Packaged builds still
+/// link Sparkle through SwiftPM; the fallback keeps UI/runtime verification
+/// possible while the secure public update channel is intentionally deferred.
+@MainActor
+final class UpdaterController {
+    init() {}
+
+    func checkForUpdates() {
+        let alert = NSAlert()
+        alert.messageText = "Updates are not configured in this build"
+        alert.informativeText = "Download a newer release manually until the signed update channel is enabled."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    func setAutomatic(_ enabled: Bool) {}
+}
+#endif

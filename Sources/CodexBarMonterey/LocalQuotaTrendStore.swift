@@ -90,25 +90,7 @@ final class LocalQuotaTrendStore {
     }
 
     private static func preferredUsedPercent(_ snapshot: ProviderSnapshot) -> Double? {
-        let windows = [
-            snapshot.usage?.primary,
-            snapshot.usage?.secondary,
-            snapshot.usage?.tertiary,
-        ].compactMap { $0 }
-
-        // Select the semantic five-hour window, rather than whichever quota
-        // currently has the largest percentage. z.ai's MCP/monthly quota may
-        // be non-zero while the main five-hour model allowance is still 0%.
-        if let fiveHour = windows.first(where: { window in
-            guard let minutes = window.windowMinutes else { return false }
-            return abs(minutes - 300) <= 1
-        }) {
-            return fiveHour.usedPercent
-        }
-
-        // Older CLI payloads may omit windowMinutes but consistently expose
-        // the main model allowance as `usage.primary`.
-        return snapshot.usage?.primary?.usedPercent
+        snapshot.headlineUsedPercent
     }
 
     private func save() {

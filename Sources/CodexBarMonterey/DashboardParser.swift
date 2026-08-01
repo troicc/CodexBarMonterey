@@ -203,10 +203,12 @@ enum DashboardParser {
         }
 
         let history: [DashboardHistoryPoint]
+        let historyContext: DashboardHistoryContext
         let historySummary: DashboardHistorySummary?
         let topModel: String?
         if let deepSeek = deepSeek {
             history = deepSeek.history
+            historyContext = .dailyUsage
             historySummary = DashboardHistorySummary(
                 spend: deepSeek.monthCost,
                 tokens: deepSeek.monthTokens,
@@ -216,6 +218,7 @@ enum DashboardParser {
             topModel = deepSeek.topModel
         } else if let zai = zai {
             history = zai.history
+            historyContext = .hourlyUsage
             historySummary = DashboardHistorySummary(
                 spend: nil,
                 tokens: zai.totalTokens,
@@ -223,6 +226,7 @@ enum DashboardParser {
             topModel = zai.topModel
         } else if let costPayload = costPayload {
             history = costHistory(costPayload)
+            historyContext = .dailyUsage
             historySummary = DashboardHistorySummary(
                 spend: costPayload.resolvedLast30DaysCostUSD,
                 tokens: costPayload.resolvedLast30DaysTokens,
@@ -232,6 +236,7 @@ enum DashboardParser {
             topModel = costPayload.topModel
         } else if let localSpend = localSpend {
             history = localSpend.history
+            historyContext = .dailySpend
             historySummary = DashboardHistorySummary(
                 spend: localSpend.last30DaysSpend,
                 tokens: nil,
@@ -241,10 +246,14 @@ enum DashboardParser {
             topModel = nil
         } else if providerSpecific {
             history = extractHistory(from: roots)
+            historyContext = snapshot.provider == "zai" && !history.isEmpty
+                ? .fiveHourQuotaSamples
+                : .generic
             historySummary = genericHistorySummary(history)
             topModel = nil
         } else {
             history = extractHistory(from: roots)
+            historyContext = .generic
             historySummary = genericHistorySummary(history, currencyCode: genericCurrencyCode)
             topModel = findString(flattened, aliases: [
                 "topmodel", "mostusedmodel", "leadingmodel"
@@ -261,12 +270,14 @@ enum DashboardParser {
             accountLabel: snapshot.accountDisplayName,
             source: snapshot.source,
             updatedText: updatedText,
-            metrics: Array(metrics.prefix(4)),
+            metrics: metrics,
             quotas: quotas,
             history: history,
+            historyContext: historyContext,
             historySummary: historySummary,
             topModel: topModel,
             errorMessage: error,
+            serviceStatus: snapshot.status,
             dashboardURL: ProviderCatalog.dashboardURL(for: snapshot.provider),
             statusURL: snapshot.status?.url ?? ProviderCatalog.statusURL(for: snapshot.provider))
     }
@@ -705,7 +716,17 @@ enum DashboardParser {
                 seen.insert(normalize(lane.title))
             }
         }
-        return Array(lanes.prefix(8))
+        if snapshot.provider == "zai" {
+            lanes.sort { left, right in
+                let leftIsFiveHour = left.windowMinutes.map { abs($0 - 300) <= 1 } ??
+                    normalize(left.title).contains("5hour")
+                let rightIsFiveHour = right.windowMinutes.map { abs($0 - 300) <= 1 } ??
+                    normalize(right.title).contains("5hour")
+                if leftIsFiveHour != rightIsFiveHour { return leftIsFiveHour }
+                return false
+            }
+        }
+        return lanes
     }
 
     private static func quotaLanes(_ snapshot: ProviderSnapshot) -> [DashboardQuotaLane] {
@@ -715,7 +736,9 @@ enum DashboardParser {
                 id: "\(index)-\(window.displayLabel)",
                 title: window.displayLabel,
                 usedPercent: max(0, min(100, window.usedPercent ?? 0)),
-                resetText: window.resetText)
+                resetText: window.resetText,
+                resetsAt: window.resetsAt,
+                windowMinutes: window.windowMinutes)
         }
     }
 
