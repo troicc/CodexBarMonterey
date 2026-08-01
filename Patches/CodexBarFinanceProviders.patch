@@ -1,22 +1,27 @@
 --- a/Sources/CodexBarCore/Providers/Moonshot/MoonshotUsageFetcher.swift
 +++ b/Sources/CodexBarCore/Providers/Moonshot/MoonshotUsageFetcher.swift
-@@ -7,5 +7,7 @@
+@@ -6,13 +6,15 @@
+ 
+ public struct MoonshotUsageSnapshot: Sendable {
      public let summary: MoonshotUsageSummary
--
--    public init(summary: MoonshotUsageSummary) {
 +    public let region: MoonshotRegion
-+
+ 
+-    public init(summary: MoonshotUsageSummary) {
 +    public init(summary: MoonshotUsageSummary, region: MoonshotRegion = .international) {
          self.summary = summary
 +        self.region = region
      }
-@@ -13,3 +15,3 @@
+ 
      public func toUsageSnapshot() -> UsageSnapshot {
 -        self.summary.toUsageSnapshot()
 +        self.summary.toUsageSnapshot(region: self.region)
      }
-@@ -30,11 +32,8 @@
+ }
+ 
+@@ -31,15 +33,12 @@
+         self.updatedAt = updatedAt
      }
+ 
 -    public func toUsageSnapshot() -> UsageSnapshot {
 -        let balance = UsageFormatter.usdString(self.availableBalance)
 -        let loginMethod: String
@@ -33,7 +38,9 @@
 +        let voucher = Self.money(self.voucherBalance, currency: currency)
 +        let loginMethod = "Balance: \(balance) (Paid: \(cash) / Granted: \(voucher))"
          let identity = ProviderIdentitySnapshot(
-@@ -50,4 +49,8 @@
+             providerID: .moonshot,
+             accountEmail: nil,
+@@ -53,6 +52,10 @@
              updatedAt: self.updatedAt,
              identity: identity)
      }
@@ -42,8 +49,14 @@
 +        "\(currency) \(String(format: "%.2f", value))"
 +    }
  }
-@@ -120,3 +123,3 @@
+ 
+ private struct MoonshotBalanceResponse: Decodable {
+@@ -129,7 +132,7 @@
+         }
+ 
          let summary = try self.parseSummary(data: response.data)
 -        return MoonshotUsageSnapshot(summary: summary)
 +        return MoonshotUsageSnapshot(summary: summary, region: region)
      }
+ 
+     public static func resolveBalanceURL(region: MoonshotRegion) -> URL {
