@@ -12,7 +12,7 @@
 | 重构基线 | bed623c — docs: add project memory and release runbook；本轮重构位于其后的提交 |
 | 工作树期望 | 本轮提交后应干净；若存在差异，不得默认属于本轮，必须重新审查 |
 | 上游引擎常量 | ENGINE_VERSION = v0.46.0 |
-| 当前正式 tag | 本轮目标为 v0.7.0；是否已发布必须用 Git/GitHub 复核 |
+| 当前正式 tag | v0.7.0 已推送到提交 4b7e3de；Release 最终状态下次接手时再按需复核 |
 | 下一版本规则 | 小优化从 v0.7.0 递增到 v0.7.1；较大重构递增到 v0.8.0 |
 | 最低系统 | macOS 12 Monterey |
 | 架构 | Universal 2：arm64 + x86_64 |
@@ -191,7 +191,8 @@
 - 已通过 UI、release、offline smoke contract；Monterey patcher 完成 38 项变换并通过 Core/CLI semantic regression 与 API 扫描。
 - 已通过 typed cost parser、z.ai quota、local spend、provider auth/config 和 66-provider catalog audit。
 - 已通过 Shell/Python/YAML/Swift parse、`git diff --check`，以及 Swift 5.6 + macOS 12 SDK 的 dashboard/core typecheck。
-- GitHub Actions branch run `30693628097` 已在提交 `b9ad530` 上完整成功，包含 Swift package tests、Universal build、最低系统检查、offline smoke 和 artifact upload；用户随后手动安装过该 branch artifact。该记录只是历史证据，正式安装仍应优先使用 `v0.7.0` Release 资产。
+- GitHub Actions branch run `30693628097` 已在提交 `b9ad530` 上完整成功，包含 Swift package tests、Universal build、最低系统检查、offline smoke 和 artifact upload；用户随后已自行安装该 branch artifact。
+- `v0.7.0` tag 已推送并触发 Release run `30694411624`。用户明确要求本次只记录流程，不继续跟踪该 Release，也不重复下载、替换或启动应用；后续 agent 不得把下面的标准安装 runbook 误当成本次遗留任务。
 - 本机没有执行完整 SwiftPM 6.2、Sparkle 依赖解析和双架构 bundle；GitHub Actions 中的 `swift test -c release`、preflight、Universal build、codesign/compat/offline smoke 才是最终构建门禁。
 
 ## 7. 已知风险、文档差异和不要误判的地方
@@ -272,6 +273,8 @@ git diff --stat origin/main...HEAD
 
 也就是说，对于发布型交付，“push + release + download/install verification”是一项完整任务，不能像普通 WIP 分支那样只推代码就结束。若用户只明确要求保存 WIP 分支，则不要擅自 release。
 
+本次 `v0.7.0` 是明确例外：用户已经自行安装 branch artifact，随后要求只把未来流程写入记忆，并明确不需要继续追踪 Release 或再次安装。因此本次不得执行第 5/6 步；Release run 是否最终成功留待未来有实际需要时再检查。
+
 以 `v0.7.0` 为例：
 
 ~~~bash
@@ -318,6 +321,8 @@ release.yml 会生成：
 ### 9.5 下载、校验并替换本机应用
 
 正式安装优先使用 tag workflow 生成的 GitHub Release zip，不要把普通 branch build artifact 当作最终发布包。下载后先校验 checksum 和解压内容，再停止旧进程与删除旧 App；删除目标必须始终是完整、显式路径 `/Applications/CodexBar Monterey.app`。
+
+以下命令是**未来 release 的标准模板，不是本次待执行任务**。本次 `v0.7.0` 用户已直接安装，除非用户再次明确要求，不得重复运行这些安装/删除命令。
 
 以 `v0.7.0` 为例：
 
