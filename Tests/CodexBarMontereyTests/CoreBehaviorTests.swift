@@ -3,6 +3,52 @@ import XCTest
 @testable import CodexBarMonterey
 
 final class CoreBehaviorTests: XCTestCase {
+    func testScopedQuotaWindowsPreserveIdentityAndReset() throws {
+        for provider in ["claude", "codex"] {
+            let json = """
+            {"provider":"\(provider)","usage":{"secondary":{"usedPercent":5,"windowMinutes":10080},
+            "extraRateWindows":[{"id":"fable","title":"Fable only","window":{"usedPercent":4,"windowMinutes":10080,"resetsAt":"2026-09-17T23:00:00Z"}},
+            {"id":"spark","title":"Weekly","window":{"usedPercent":7,"windowMinutes":10080}}]}}
+            """
+            let snapshot = try XCTUnwrap(CLIClient.decodeSnapshots(json).first)
+            let dashboard = DashboardParser.dashboard(snapshot: snapshot, supplementalJSON: json)
+            XCTAssertEqual(dashboard.quotas.map(\.title), ["Weekly", "Fable only", "Weekly"])
+            XCTAssertEqual(dashboard.quotas.map(\.usedPercent), [5, 4, 7])
+            XCTAssertEqual(Set(dashboard.quotas.map(\.id)).count, 3)
+            XCTAssertNotNil(dashboard.quotas[1].resetsAt)
+            XCTAssertEqual(dashboard.quotas[1].windowMinutes, 10080)
+        }
+    }
+
+    func testPlanAndClaudeCLIIdentityFallbackIsolation() throws {
+        func snapshots(_ source: String = "claude", _ usage: String = "{}") throws -> [ProviderSnapshot] {
+            try CLIClient.decodeSnapshots("{\"provider\":\"claude\",\"source\":\"\(source)\",\"usage\":\(usage)}")
+        }
+        let status = """
+        {"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"test@example.com","subscriptionType":"pro"}
+        """
+        let original = try snapshots()
+        let enriched = ClaudeCLIAccountStatus.enrich(original, json: status)[0]
+        XCTAssertEqual(enriched.accountDisplayName, "test@example.com")
+        XCTAssertEqual(enriched.planDisplayName, "Pro")
+        XCTAssertEqual(enriched.id, original[0].id)
+        for input in [try snapshots("oauth"), try snapshots("web"), original + original,
+                      try snapshots("claude", "{\"accountEmail\":\"other@example.com\"}")] {
+            XCTAssertEqual(ClaudeCLIAccountStatus.enrich(input, json: status), input)
+        }
+        for invalid in ["{}", status.replacingOccurrences(of: "true", with: "false"),
+                        status.replacingOccurrences(of: "firstParty", with: "thirdParty")] {
+            XCTAssertEqual(ClaudeCLIAccountStatus.enrich(original, json: invalid), original)
+        }
+        let plans: [(String, String?)] = [("prolite", "Pro Lite"), ("plus", "Plus"), ("pro", "Pro"), ("oauth", nil)]
+        for (method, expected) in plans {
+            let codex = try CLIClient.decodeSnapshots("{\"provider\":\"codex\",\"usage\":{\"identity\":{\"loginMethod\":\"\(method)\"}}}")[0]
+            XCTAssertEqual(codex.planDisplayName, expected)
+        }
+        let explicit = try CLIClient.decodeSnapshots("{\"provider\":\"codex\",\"plan\":\"Enterprise\",\"usage\":{\"loginMethod\":\"pro\"}}")[0]
+        XCTAssertEqual(explicit.planDisplayName, "Enterprise")
+    }
+
     func testCostHistoryKeepsKnownSubtotalAndLabelsPartialEstimates() {
         for provider in ["codex", "claude"] {
             let model = provider == "claude" ? "claude-priced" : "gpt-priced"

@@ -11,6 +11,7 @@ struct ModelAttributionVisualQA {
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let gapDashboards = historyGapRegression()
         let partialDashboards = partialCostRegression()
+        let subscriptionDashboards = subscriptionRegression()
         let dataDirectory = output.appendingPathComponent("fixture-ledger")
         let ledger = LocalTokenHistoryStore(storageDirectory: dataDirectory)
         let date = DateFormatter()
@@ -59,6 +60,12 @@ struct ModelAttributionVisualQA {
         for mode in ["light", "dark"] {
             let appearance = NSAppearance(named: mode == "light" ? .aqua : .darkAqua)!
             app.appearance = appearance
+            for dashboard in subscriptionDashboards {
+                try render(ProviderDetailPopoverView(dashboard: dashboard, isRefreshing: false,
+                    refresh: {}, openDashboard: {}, openStatus: {}, openSettings: {}),
+                    size: NSSize(width: 390, height: 560), appearance: appearance,
+                    output: output.appendingPathComponent("subscription-\(dashboard.id)-\(mode).png"))
+            }
             for dashboard in gapDashboards + partialDashboards {
                 try render(ScrollView {
                     VStack(spacing: 14) {
@@ -123,6 +130,45 @@ struct ModelAttributionVisualQA {
             print("PASS | \(provider): known/partial/unknown/zero cost history, lower-bound labels and model tooltip")
             return dashboard
         }
+    }
+
+    static func subscriptionRegression() -> [ProviderDashboard] {
+        let status = """
+        {"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","email":"claude@example.com","subscriptionType":"pro"}
+        """
+        var dashboards: [ProviderDashboard] = []
+        for provider in ["claude", "codex"] {
+            let identity = provider == "codex" ? "\"identity\":{\"accountEmail\":\"codex@example.com\",\"loginMethod\":\"prolite\"}," : ""
+            let title = provider == "claude" ? "Fable only" : "Codex Spark Weekly"
+            let json = """
+            {"provider":"\(provider)","source":"\(provider)","usage":{\(identity)
+              "primary":{"usedPercent":26,"windowMinutes":300},
+              "secondary":{"usedPercent":5,"windowMinutes":10080},
+              "extraRateWindows":[{"id":"model-weekly","title":"\(title)","window":{"usedPercent":4,"windowMinutes":10080,"resetsAt":"2026-09-17T23:00:00Z"}},
+              {"id":"other-weekly","title":"Weekly","window":{"usedPercent":7,"windowMinutes":10080}}]}}
+            """
+            let original = try! CLIClient.decodeSnapshots(json)
+            let snapshot = ClaudeCLIAccountStatus.enrich(original, json: status)[0]
+            precondition(snapshot.id == original[0].id, "display enrichment must preserve ledger/cache identity")
+            let dashboard = DashboardParser.dashboard(snapshot: snapshot, supplementalJSON: json)
+            precondition(dashboard.quotas.count == 4, "preserve scoped IDs, deduplicate repeated raw roots")
+            precondition(dashboard.quotas[2].title == title && dashboard.quotas[2].usedPercent == 4)
+            precondition(dashboard.quotas[2].windowMinutes == 10080 && dashboard.quotas[2].resetsAt != nil)
+            precondition(dashboard.quotas[3].title == "Weekly" && dashboard.quotas[3].usedPercent == 7)
+            precondition(dashboard.accountLabel == "\(provider)@example.com")
+            precondition(dashboard.planLabel == (provider == "claude" ? "Pro" : "Pro Lite"))
+            dashboards.append(dashboard)
+        }
+        for source in ["oauth", "web"] {
+            let snapshots = try! CLIClient.decodeSnapshots("{\"provider\":\"claude\",\"source\":\"\(source)\",\"usage\":{}}")
+            precondition(ClaudeCLIAccountStatus.enrich(snapshots, json: status) == snapshots)
+        }
+        for method in ["oauth", "api_key", "cli"] {
+            let snapshots = try! CLIClient.decodeSnapshots("{\"provider\":\"codex\",\"usage\":{\"loginMethod\":\"\(method)\"}}")
+            precondition(snapshots[0].planDisplayName == nil)
+        }
+        print("PASS | Claude/Codex account/plan; scoped quota identity/reset; source isolation; stable ledger keys")
+        return dashboards
     }
 
     static func historyGapRegression() -> [ProviderDashboard] {

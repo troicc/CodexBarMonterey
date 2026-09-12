@@ -186,6 +186,7 @@ struct ProviderDashboard: Identifiable, Hashable {
     let statusURL: URL?
     var topModel10Days: String? = nil
     var topModelToday: String? = nil
+    var planLabel: String? = nil
 
     var showsTopModels: Bool {
         topModel10Days != nil || topModelToday != nil || ["claude", "codex", "zai"].contains(id)

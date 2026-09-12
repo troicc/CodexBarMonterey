@@ -199,7 +199,7 @@ enum DashboardParser {
         if metrics.isEmpty, let credits = snapshot.credits?.remaining, credits > 0 {
             metrics.append(DashboardMetric(title: "Credits", value: decimal(credits)))
         }
-        if metrics.isEmpty, let plan = snapshot.plan, !plan.isEmpty {
+        if metrics.isEmpty, let plan = snapshot.planDisplayName, !plan.isEmpty {
             metrics.append(DashboardMetric(title: "Plan", value: plan))
         }
         if metrics.isEmpty, financeProfile.trackingMode == .quotaOnly {
@@ -300,7 +300,8 @@ enum DashboardParser {
             dashboardURL: ProviderCatalog.dashboardURL(for: snapshot.provider),
             statusURL: snapshot.status?.url ?? ProviderCatalog.statusURL(for: snapshot.provider),
             topModel10Days: costPayload != nil ? costPayload?.topModel(dayCount: 10) : localTokenHistory?.topModel10Days,
-            topModelToday: costPayload != nil ? costPayload?.topModel(dayCount: 1) : localTokenHistory?.topModelToday)
+            topModelToday: costPayload != nil ? costPayload?.topModel(dayCount: 1) : localTokenHistory?.topModelToday,
+            planLabel: snapshot.planDisplayName)
     }
 
     private struct DeepSeekPayload {
@@ -779,6 +780,7 @@ enum DashboardParser {
         if snapshot.provider == "deepseek" { return [] }
         var lanes = quotaLanes(snapshot)
         var seen = Set(lanes.map { normalize($0.title) })
+        var seenScopedIDs = Set<String>()
 
         if let percent = mimo?.tokenPercent {
             let title = "Token plan"
@@ -791,9 +793,14 @@ enum DashboardParser {
         }
 
         for root in roots {
-            for lane in extractQuotaLanes(root) where !seen.contains(normalize(lane.title)) {
+            for lane in extractQuotaLanes(root) {
+                if lane.id.hasPrefix("scoped-") {
+                    guard seenScopedIDs.insert(lane.id).inserted else { continue }
+                } else {
+                    guard !seen.contains(normalize(lane.title)) else { continue }
+                    seen.insert(normalize(lane.title))
+                }
                 lanes.append(lane)
-                seen.insert(normalize(lane.title))
             }
         }
         if snapshot.provider == "zai" {
@@ -826,6 +833,21 @@ enum DashboardParser {
         var lanes: [DashboardQuotaLane] = []
         func visit(_ value: Any) {
             if let dictionary = value as? [String: Any] {
+                // extraRateWindows puts semantic identity outside the nested rate window.
+                // Preserve it: Fable, Spark, etc. must not collapse into the global Weekly lane.
+                if let id = dictionary["id"] as? String,
+                   let title = dictionary["title"] as? String,
+                   let window = dictionary["window"] as? [String: Any] {
+                    if let data = try? JSONSerialization.data(withJSONObject: window),
+                       let rate = try? JSONCoding.decoder.decode(RateWindow.self, from: data),
+                       let used = rate.usedPercent, used.isFinite {
+                        lanes.append(DashboardQuotaLane(id: "scoped-\(id)", title: title,
+                            usedPercent: max(0, min(100, used)),
+                            resetText: rate.resetText ?? window["resetDescription"] as? String,
+                            resetsAt: rate.resetsAt, windowMinutes: rate.windowMinutes))
+                    }
+                    return
+                }
                 var normalized: [String: Any] = [:]
                 for (key, nested) in dictionary { normalized[normalize(key)] = nested }
                 if let used = firstNumber(normalized, keys: ["usedpercent", "percentused", "usagepercent", "tokenpercent"]) {

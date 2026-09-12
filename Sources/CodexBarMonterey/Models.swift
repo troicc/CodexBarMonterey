@@ -11,6 +11,8 @@ struct ProviderSnapshot: Decodable, Hashable, Identifiable {
     let plan: String?
     let error: ProviderError?
     let rawJSON: String?
+    // Display-only fallback: do not re-key existing local history when CLI metadata appears.
+    var cliAccountStatus: ClaudeCLIAccountStatus? = nil
 
     init(
         provider: String,
@@ -72,8 +74,24 @@ struct ProviderSnapshot: Decodable, Hashable, Identifiable {
         case let (_, organization?):
             return organization
         default:
-            return nil
+            return cliAccountStatus?.email
         }
+    }
+
+    var planDisplayName: String? {
+        if let explicit = Self.firstNonEmpty([plan]) { return explicit }
+        guard ["claude", "codex"].contains(provider.lowercased()) else { return nil }
+        guard let value = Self.firstNonEmpty([
+            usage?.identity?.loginMethod, usage?.loginMethod, cliAccountStatus?.subscriptionType,
+        ]) else { return nil }
+        let key = value.lowercased().replacingOccurrences(of: "claude ", with: "")
+            .replacingOccurrences(of: "chatgpt ", with: "")
+        let names = ["free": "Free", "pro": "Pro", "plus": "Plus", "prolite": "Pro Lite",
+                     "max": "Max", "max5x": "Max 5x", "max20x": "Max 20x",
+                     "max 5x": "Max 5x", "max 20x": "Max 20x", "team": "Team",
+                     "business": "Business", "enterprise": "Enterprise", "edu": "Edu"]
+        // loginMethod also carries authentication mechanisms; these are not plans.
+        return names[key]
     }
 
     private var accountName: String? {
@@ -229,6 +247,33 @@ extension ProviderStatus {
 extension ProviderSnapshot {
     var serviceHealth: ProviderServiceHealth { status?.health ?? .unknown }
     var hasVisibleAlert: Bool { error != nil || serviceHealth.isIncident }
+}
+
+struct ClaudeCLIAccountStatus: Decodable, Hashable {
+    let loggedIn: Bool
+    let authMethod: String?
+    let apiProvider: String?
+    let email: String?
+    let subscriptionType: String?
+
+    static func enrich(_ snapshots: [ProviderSnapshot], json: String) -> [ProviderSnapshot] {
+        guard snapshots.filter({ $0.provider == "claude" }).count == 1,
+              let data = json.data(using: .utf8),
+              let status = try? JSONDecoder().decode(Self.self, from: data),
+              status.loggedIn, status.authMethod == "claude.ai", status.apiProvider == "firstParty",
+              let email = status.email, !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return snapshots }
+        return snapshots.map { snapshot in
+            guard snapshot.provider == "claude", snapshot.source == "claude", snapshot.error == nil,
+                  snapshot.usage != nil else { return snapshot }
+            let reportedEmail = snapshot.usage?.identity?.accountEmail ?? snapshot.usage?.accountEmail ?? snapshot.account
+            if let reportedEmail = reportedEmail,
+               reportedEmail.caseInsensitiveCompare(email) != .orderedSame { return snapshot }
+            var result = snapshot
+            result.cliAccountStatus = status
+            return result
+        }
+    }
 }
 
 struct UsageSnapshot: Decodable, Hashable {

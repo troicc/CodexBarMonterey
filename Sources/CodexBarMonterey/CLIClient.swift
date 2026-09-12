@@ -58,7 +58,15 @@ actor CLIClient {
             throw ClientError.commandFailed(result.status, result.stderr)
         }
         do {
-            return try Self.decodeSnapshots(result.stdout)
+            let snapshots = try Self.decodeSnapshots(result.stdout)
+            // Only enrich the local Claude CLI source, never OAuth/browser or multiple accounts.
+            if snapshots.filter({ $0.provider == "claude" }).count == 1,
+               snapshots.contains(where: { $0.provider == "claude" && $0.source == "claude" && $0.error == nil }),
+               let identity = try? await run(arguments: ["claude", "auth", "status", "--json"],
+                   timeout: 10, executableOverride: URL(fileURLWithPath: "/usr/bin/env")) {
+                return ClaudeCLIAccountStatus.enrich(snapshots, json: identity.stdout)
+            }
+            return snapshots
         } catch {
             if result.status != 0 {
                 throw ClientError.commandFailed(result.status, result.stderr.isEmpty ? result.stdout : result.stderr)
@@ -231,8 +239,10 @@ actor CLIClient {
         arguments: [String],
         timeout: TimeInterval,
         acceptNonZero: Bool = false,
-        includeLiveUsage: Bool = false
+        includeLiveUsage: Bool = false,
+        executableOverride: URL? = nil
     ) async throws -> CommandResult {
+        let executableURL = executableOverride ?? self.executableURL
         guard FileManager.default.isExecutableFile(atPath: executableURL.path) else {
             throw ClientError.helperMissing
         }
@@ -318,7 +328,7 @@ actor CLIClient {
         }
     }
 
-    private static func decodeSnapshots(_ json: String) throws -> [ProviderSnapshot] {
+    static func decodeSnapshots(_ json: String) throws -> [ProviderSnapshot] {
         let data = Data(json.utf8)
         do {
             let root = try JSONSerialization.jsonObject(with: data)

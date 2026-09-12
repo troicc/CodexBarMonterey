@@ -196,6 +196,11 @@ struct NativeMenuProviderCardView: View {
                     .lineLimit(1)
             }
 
+            if let plan = dashboard.planLabel {
+                Label("Plan · \(plan)", systemImage: "creditcard")
+                    .font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
+            }
+
             if showMetrics, !dashboard.metrics.isEmpty {
                 LazyVGrid(
                     columns: [GridItem(.flexible()), GridItem(.flexible())],

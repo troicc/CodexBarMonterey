@@ -2,6 +2,16 @@
 
 > ⚠️ **记忆漂移提醒：本文件只是 2026-08-01 的人工快照，不是事实源。** 分支、HEAD、工作树、上游能力、依赖版本、CI 和发布状态都可能在下一次对话前改变。每次开始分析、修改、发布或接手任务时，必须先读取本文件，再用 `git status --short --branch`、`git log -5 --oneline --decorate`、`git branch -vv` 和当前代码/测试重新验证。发生冲突时，以工作树、代码、测试、CI 和 Git 历史为准，并在同一轮改动中同步修正本文件；不得仅凭模型记忆或本文件里的旧结论继续操作。
 
+## 2026-09-12 专属额度与账号/订阅套餐
+
+- 真实 helper 已返回 Claude `extraRateWindows[].{id,title,window}` 的 `Fable only`，Codex 同结构返回 Spark / reserve 等专属额度。旧 generic parser 只递归子 window，把它们重命名为 Weekly / 5 hours 并按标题与总额度去重。现在保留 wrapper ID、标题、独立百分比、重置日期和周期；专属额度按 ID 去重，不与同周期总额度合并，也不从全局比例推算。
+- `ProviderSnapshot.planDisplayName` 优先使用明确顶层 plan，兼容 Codex/Claude 在 usage.identity.loginMethod / usage.loginMethod 返回的套餐名称；`prolite` 显示 Pro Lite，认证方式 oauth/api_key/cli 不冒充套餐。详情固定 header、All Providers、原生菜单及设置统一显示套餐。
+- 当次 Claude source=claude 的用量返回未提供邮箱/套餐。CLIClient 在同一进程环境下只读执行 `claude auth status --json`（10 秒上限），仅对单个 Claude CLI 来源、成功用量、已登录第一方 claude.ai 且邮箱无冲突时补充显示；OAuth/浏览器来源、多账号、登出、第三方或失败状态均不混用。本次实测 subscriptionType=pro，按源数据显示 Pro，不根据 Fable 存在推断 Max。没有读取/输出 auth token，没有更改 ENGINE_VERSION。
+- 补充账号只用于显示，保留原 snapshot ID，防止旧默认账号本地历史被重新分桶。新增回归覆盖总额度与多个同周期 scoped lanes、重复 raw roots、reset metadata、套餐优先级/认证方法过滤、CLI 来源与邮箱冲突隔离以及稳定历史键。
+- `bash Scripts/test_cost_history_parser.sh`、UI/release/offline smoke/Monterey patcher/provider auth/catalog contracts 已通过。`bash Scripts/test_visual_model_attribution.sh /private/tmp/codexbar-subscription-evidence` 的 production view 与 geometry 断言通过；新增 Claude/Codex 390×560 浅深色四张截图均已人工检查。首次测试因解析入口 private 无法访问而编译失败，改为 internal 后复跑通过。SwiftPM 6.2 测试仍由推送后的 CI 验证，本机使用 Swift 5.6 回归/构建。
+- `Scripts/build_local_validation.sh` 已生成 `/private/tmp/codexbar-subscription-build/CodexBar Monterey Local Validation.app`，Universal 2 / macOS 12 / deep codesign / 65-provider offline smoke 均通过；真实运行 `/private/tmp/codexbar-subscription-runtime.txt` 返回 `PASS | snapshots=4 overviewItems=11`。helper/Sparkle 仍复用安装模板，此包是本地 ad-hoc 验证包，不是正式 Release。
+- 延续用户已明确确认的安装与 GitHub 推送授权，已安装到 `/Applications/CodexBar Monterey.app`（0.10.0 / build 202609121035）；源/目标 Info.plist 与主程序逐字节一致，签名与双架构复核通过。完整包 fingerprint `8f66c84550147f3501d3093f36cdbe56439828e00a14fbd0a764ab1e1870e48f`，旧版备份 `/Applications/.codex-backup-CodexBar Monterey-8db4a5537c034f389d5c4542c2eeb246.app`。安装器确认没有旧进程，未自动重启安装版；正常推送 main，不创建 tag/Release，CI 状态须按对应 SHA 查询。
+
 ## 2026-09-12 部分费用曲线修复
 
 - 用户发现 Codex 费用图只剩无用量日的零点。真实 CLI 当次 25 个有用量日均有已知 GPT 模型费用，同时含未定价 `codex-auto-review`；原 `resolvedCost` 要求全部模型有价格，导致历史图丢弃整天已知费用。此前摘要卡片已支持部分估算，曲线未同步。

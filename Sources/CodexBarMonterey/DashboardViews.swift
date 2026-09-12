@@ -380,7 +380,7 @@ private struct ProviderHeaderView: View {
                 .foregroundColor(.white.opacity(0.55))
             }
             Spacer()
-            if let plan = snapshot.plan, !plan.isEmpty {
+            if let plan = snapshot.planDisplayName, !plan.isEmpty {
                 Text(plan)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.white.opacity(0.65))
@@ -796,6 +796,14 @@ struct ProviderDetailPopoverView: View {
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
+                        .help(account)
+                }
+                if let plan = dashboard.planLabel {
+                    Text("Plan · \(plan)")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .help("Subscription plan: \(plan)")
                 }
                 Text(dashboard.updatedText)
                     .font(.system(size: 9))
@@ -1365,6 +1373,10 @@ private struct AllProviderCard: View {
                     Text(dashboard.title).font(.system(size: 15, weight: .semibold))
                     Text([dashboard.accountLabel, dashboard.updatedText].compactMap { $0 }.joined(separator: " · "))
                         .font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
+                    if let plan = dashboard.planLabel {
+                        Text("Plan · \(plan)").font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.secondary).lineLimit(1)
+                    }
                 }
                 Spacer()
                 if let status = dashboard.serviceStatus, status.health != .unknown {

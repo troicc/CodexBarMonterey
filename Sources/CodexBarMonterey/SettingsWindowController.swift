@@ -1097,7 +1097,7 @@ private struct ProviderConnectionRow: View {
     private var detailText: String {
         if let error = snapshot.error?.message { return error }
         if snapshot.serviceHealth.isIncident, let status = snapshot.status { return status.displayText }
-        let parts = [snapshot.source, snapshot.plan]
+        let parts = [snapshot.source, snapshot.planDisplayName]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return parts.isEmpty ? "Connected" : parts.joined(separator: " · ")

@@ -453,7 +453,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     private func providerSubtitle(_ snapshot: ProviderSnapshot, dashboard: ProviderDashboard) -> String {
         var parts: [String] = []
         if Preferences.shared.showAccountInMenu, let account = snapshot.accountDisplayName { parts.append(account) }
-        if let plan = snapshot.plan, !plan.isEmpty { parts.append(plan) }
+        if let plan = snapshot.planDisplayName, !plan.isEmpty { parts.append(plan) }
         if let source = dashboard.source, !source.isEmpty { parts.append(source) }
         return parts.isEmpty ? dashboard.updatedText : parts.joined(separator: " · ")
     }
