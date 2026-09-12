@@ -660,11 +660,12 @@ enum DashboardParser {
             let excluded = raw.totalTokens == 0 || (raw.reconciledModels.map {
                 $0.allSatisfy { !CostHistoryPayload.isClaudeModel($0.modelName) }
             } ?? false)
+            let estimate = day.map { CostEstimateSummary(days: [$0]) }
             return DashboardHistoryPoint(
                 label: formatHistoryLabel(raw.date),
-                spend: day?.resolvedCost ?? (day == nil && excluded ? 0 : nil),
+                spend: estimate?.knownCost ?? (day == nil && excluded ? 0 : nil),
                 tokens: day?.totalTokens ?? (day == nil && excluded ? 0 : nil),
-                dayKey: raw.date)
+                dayKey: raw.date, spendEstimate: estimate)
         }
         return DashboardHistoryPoint.continuousDays(points,
             through: payload.updatedAt.flatMap(isoDate), missingTokens: 0, missingSpend: 0)

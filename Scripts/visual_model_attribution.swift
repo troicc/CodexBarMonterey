@@ -10,6 +10,7 @@ struct ModelAttributionVisualQA {
         let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let gapDashboards = historyGapRegression()
+        let partialDashboards = partialCostRegression()
         let dataDirectory = output.appendingPathComponent("fixture-ledger")
         let ledger = LocalTokenHistoryStore(storageDirectory: dataDirectory)
         let date = DateFormatter()
@@ -58,7 +59,7 @@ struct ModelAttributionVisualQA {
         for mode in ["light", "dark"] {
             let appearance = NSAppearance(named: mode == "light" ? .aqua : .darkAqua)!
             app.appearance = appearance
-            for dashboard in gapDashboards {
+            for dashboard in gapDashboards + partialDashboards {
                 try render(ScrollView {
                     VStack(spacing: 14) {
                         ForEach(dashboardHistorySeries(for: dashboard)) { series in
@@ -66,7 +67,7 @@ struct ModelAttributionVisualQA {
                         }
                     }.padding(14)
                 }, size: NSSize(width: 390, height: 340), appearance: appearance,
-                    output: output.appendingPathComponent("history-\(dashboard.id)-\(mode).png"))
+                    output: output.appendingPathComponent("history-\(dashboard.id)-\(dashboard.history.last?.spendEstimate?.isPartial == true ? "partial-" : "")\(mode).png"))
             }
             for height: CGFloat in [560, 680] {
                 try render(AllProvidersContentView(entries: entries, isRefreshing: false, error: nil,
@@ -88,6 +89,40 @@ struct ModelAttributionVisualQA {
             }
         }
         print("PASS | production views; popover 620x560/680; settings 760x680; light/dark; model sums reconciled")
+    }
+
+    static func partialCostRegression() -> [ProviderDashboard] {
+        return ["codex", "claude"].map { provider in
+            let model = provider == "claude" ? "claude-priced" : "gpt-priced"
+            let unpriced = provider == "claude" ? "claude-unknown" : "codex-auto-review"
+            let json = """
+            {"provider":"\(provider)","daily":[
+              {"date":"2026-09-08","totalTokens":100,"totalCost":5,"modelsUsed":["\(model)"]},
+              {"date":"2026-09-10","totalTokens":100,"totalCost":99,"modelBreakdowns":[
+                {"modelName":"\(model)","totalTokens":80,"cost":3.5},
+                {"modelName":"\(unpriced)","totalTokens":20}]},
+              {"date":"2026-09-11","totalTokens":20,"modelsUsed":["\(unpriced)"]},
+              {"date":"2026-09-12","totalTokens":100,"totalCost":7,"modelBreakdowns":[
+                {"modelName":"\(model)","totalTokens":80,"cost":7},
+                {"modelName":"\(unpriced)","totalTokens":20}]}
+            ]}
+            """
+            let snapshot = ProviderSnapshot(provider: provider, version: nil, source: "test", status: nil,
+                usage: nil, credits: nil, account: nil, plan: nil, error: nil, rawJSON: "{}")
+            let dashboard = DashboardParser.dashboard(snapshot: snapshot, supplementalJSON: json)
+            precondition(dashboard.history.map(\.spend) == [5, 0, 3.5, nil, 7])
+            let series = dashboardHistorySeries(for: dashboard).first { $0.id == "daily-cost" }!
+            precondition(series.values == [5, 0, 3.5, nil, 7])
+            precondition(series.hasPartialEstimates && series.latestText == "≥$7.00")
+            precondition(series.valueText(at: 0) == "$5.00" && series.valueText(at: 1) == "$0.00")
+            precondition(series.valueText(at: 3) == "—")
+            precondition(series.tooltip(at: 2).contains(unpriced) && series.tooltip(at: 2).contains("≥$3.50"))
+            precondition(series.tooltip(at: 3).contains("No known prices"))
+            let raw = CostHistoryPayloadParser.payload(provider: provider, fromJSON: json)!
+            precondition(raw.sortedDaily[1].resolvedCost == nil, "complete totals must remain distinct from chart subtotals")
+            print("PASS | \(provider): known/partial/unknown/zero cost history, lower-bound labels and model tooltip")
+            return dashboard
+        }
     }
 
     static func historyGapRegression() -> [ProviderDashboard] {

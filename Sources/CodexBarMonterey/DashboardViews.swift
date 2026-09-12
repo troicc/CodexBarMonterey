@@ -877,7 +877,7 @@ struct ProviderDetailPopoverView: View {
         if !series.isEmpty {
             ProviderDetailSectionTitle(title: "History", symbol: "chart.xyaxis.line")
             Text(dashboard.id == "claude" || dashboard.id == "codex"
-                ? "Local model usage · estimated API cost, not your bill. Missing prices appear as gaps. Claude excludes other models; logs cannot verify the billing account."
+                ? "Local model usage · estimated API cost, not your bill. Partial estimates show known costs; fully unknown costs appear as gaps. Claude excludes other models; logs cannot verify the billing account."
                 : "Each chart is labeled and scaled independently.")
                 .font(.system(size: 9))
                 .foregroundColor(.secondary)
@@ -994,15 +994,36 @@ struct ProviderHistorySeries: Identifiable {
     let fixedMaximum: Double?
 
     var latestText: String {
-        guard let last = values.last, let value = last else { return "—" }
+        valueText(at: values.count - 1)
+    }
+
+    var costEstimates: [CostEstimateSummary?] = []
+
+    var hasPartialEstimates: Bool {
+        costEstimates.contains { $0?.knownCost != nil && $0?.isPartial == true }
+    }
+
+    func valueText(at index: Int) -> String {
+        guard values.indices.contains(index), let value = values[index] else { return "—" }
         switch kind {
         case .tokens, .requests:
             return compactNumber(value)
         case .spend:
-            return currencyNumber(value, code: currencyCode)
+            let partial = costEstimates.indices.contains(index) && costEstimates[index]?.isPartial == true
+            return (partial ? "≥" : "") + currencyNumber(value, code: currencyCode)
         case .percentage:
             return String(format: "%.0f%%", value)
         }
+    }
+
+    func tooltip(at index: Int) -> String {
+        var text = "\(labels[index]): \(valueText(at: index))"
+        if costEstimates.indices.contains(index), let estimate = costEstimates[index], estimate.isPartial {
+            text += estimate.knownCost == nil ? " · No known prices" : " · Partial estimate; known costs only"
+            if !estimate.unpricedModels.isEmpty { text += " · Unpriced: " + estimate.unpricedModels.joined(separator: ", ") }
+            if estimate.hasUnattributedCost { text += " · Some costs unavailable" }
+        }
+        return text
     }
 }
 
@@ -1036,9 +1057,9 @@ struct ProviderHistorySeriesView: View {
             .frame(height: 74)
             .overlay {
                 HStack(spacing: 0) {
-                    ForEach(Array(series.values.enumerated()), id: \.offset) { index, value in
+                    ForEach(Array(series.values.enumerated()), id: \.offset) { index, _ in
                         Color.clear.contentShape(Rectangle())
-                            .help("\(series.labels[index]): \(value.map { String(format: "%g", $0) } ?? "No data")")
+                            .help(series.tooltip(at: index))
                     }
                 }
             }
@@ -1049,6 +1070,11 @@ struct ProviderHistorySeriesView: View {
             }
             .font(.system(size: 9))
             .foregroundColor(.secondary)
+            if series.hasPartialEstimates {
+                Text("Partial estimates · known costs only")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
         }
         .padding(10)
         .background(
@@ -1118,7 +1144,8 @@ func dashboardHistorySeries(for dashboard: ProviderDashboard) -> [ProviderHistor
             kind: kind,
             currencyCode: currency,
             color: color,
-            fixedMaximum: fixedMaximum))
+            fixedMaximum: fixedMaximum,
+            costEstimates: kind == .spend ? dashboard.history.map(\.spendEstimate) : []))
     }
 
     switch dashboard.historyContext {

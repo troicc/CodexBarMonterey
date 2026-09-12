@@ -2,6 +2,16 @@
 
 > ⚠️ **记忆漂移提醒：本文件只是 2026-08-01 的人工快照，不是事实源。** 分支、HEAD、工作树、上游能力、依赖版本、CI 和发布状态都可能在下一次对话前改变。每次开始分析、修改、发布或接手任务时，必须先读取本文件，再用 `git status --short --branch`、`git log -5 --oneline --decorate`、`git branch -vv` 和当前代码/测试重新验证。发生冲突时，以工作树、代码、测试、CI 和 Git 历史为准，并在同一轮改动中同步修正本文件；不得仅凭模型记忆或本文件里的旧结论继续操作。
 
+## 2026-09-12 部分费用曲线修复
+
+- 用户发现 Codex 费用图只剩无用量日的零点。真实 CLI 当次 25 个有用量日均有已知 GPT 模型费用，同时含未定价 `codex-auto-review`；原 `resolvedCost` 要求全部模型有价格，导致历史图丢弃整天已知费用。此前摘要卡片已支持部分估算，曲线未同步。
+- `DashboardHistoryPoint` 增加 `spendEstimate`，Codex/Claude 日图使用同一 `CostEstimateSummary` 的 `knownCost`，保留已知小计；完整价格 accessor、账本、导出和定价引擎不变。Claude 继续先按模型归属过滤。
+- 费用曲线最新部分金额前加 `≥`；只要图中存在已知部分费用，显示 `Partial estimates · known costs only`；悬停显示对应日期金额与未定价模型。完全未知仍为 nil 断点，无用量补日仍为真实零，不误标成部分估算。
+- 已增加 Codex/Claude 的已知/部分/全未知/空日混合场景，以及小计与不一致顶层金额隔离、最新金额和 tooltip 断言。`bash Scripts/test_cost_history_parser.sh`、UI/release/offline smoke contracts、`git diff --check` 通过；`bash Scripts/test_visual_model_attribution.sh /private/tmp/codexbar-partial-cost-evidence` 通过，四张 production 390×340 部分费用图（两 provider × 浅深色）已人工检查。
+- 使用真实 CLI 数据和 production `CostEstimateSummary` 核对，25 个有用量日均恢复已知价格点，全部标记为部分估算，逐日小计与 CLI 已知费用一致。旧提交 `9e72f06` 的 GitHub Swift package tests 和 menu preflight 已成功；本次新的 SwiftPM 测试仍由推送后的 CI 验证，本机 Swift 5.6 使用轻量回归与双架构优化构建。
+- `Scripts/build_local_validation.sh` 生成 `/private/tmp/codexbar-partial-cost-build/CodexBar Monterey Local Validation.app`，Universal 2、macOS 12、deep codesign、65-provider offline smoke 均通过。真实运行输出 `/private/tmp/codexbar-partial-cost-runtime.txt` 为 `PASS | snapshots=4 overviewItems=11`。本机仍为复用 helper/Sparkle 的 ad-hoc 验证包，非正式 Release。
+- 延续用户已确认的安装与 GitHub 推送授权，已安装到 `/Applications/CodexBar Monterey.app`（0.10.0 / build 202609121022），源/目标主程序与 Info.plist 完全一致，签名和双架构复核通过；完整包 fingerprint `af32126b654db518e7dc1cb407e9ab2c1491ad074d3cc84ab56bb74b215ee8e4`。旧版备份 `/Applications/.codex-backup-CodexBar Monterey-ba1dc13b148a4799a56aca331f863fcd.app`；安装器确认无旧进程，安装版未自动启动。修复提交推送到 origin/main，GitHub 构建结果须按对应 SHA 查询。
+
 ## 2026-09-12 历史图缺失日期修复（接续未提交工作树）
 
 - 用户截图的根因：Dashboard 将稀疏 daily 行直接映射为等间距图点，没有补齐日历；零值柱又被最小 2pt 高度画成有用量。真实 CLI 2026-09-12 扫描中，9 月 9 日没有 Claude 行，9 月 10/11 日仍有 Claude 模型用量；不能按用户印象删改这些记录。

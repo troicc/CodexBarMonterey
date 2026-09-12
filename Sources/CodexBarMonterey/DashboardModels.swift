@@ -22,14 +22,17 @@ struct DashboardHistoryPoint: Identifiable, Hashable {
     let tokens: Double?
     let requests: Double?
     let dayKey: String?
+    let spendEstimate: CostEstimateSummary?
 
-    init(label: String, spend: Double? = nil, tokens: Double? = nil, requests: Double? = nil, dayKey: String? = nil) {
+    init(label: String, spend: Double? = nil, tokens: Double? = nil, requests: Double? = nil,
+         dayKey: String? = nil, spendEstimate: CostEstimateSummary? = nil) {
         self.id = dayKey ?? label
         self.label = label
         self.spend = spend
         self.tokens = tokens
         self.requests = requests
         self.dayKey = dayKey
+        self.spendEstimate = spendEstimate
     }
 
     /// Preserve calendar spacing. Missing API samples are unknown unless the

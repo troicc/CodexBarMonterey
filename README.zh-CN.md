@@ -21,7 +21,7 @@
 - 智谱 z.ai 的逐小时/逐模型 token 会按时间戳去重并永久保存在 Application Support，逐步形成真实的 30 天与全时段本地历史；Codex/Claude 的 input、output、cache read、cache creation 和 total 日数据也会长期入账，不把 5h quota 百分比伪装成 token。
 - Claude 历史按实际模型归属统计：GLM 等第三方模型保留为独立的「Claude Code · Other models」数据来源，不混入 Claude，也不与 z.ai API 数据重复合并。混用日期只有在模型 token 明细与日总量一致时才拆分；未知归属单独保留。
 - Codex/Claude 的模型 token 明细会持久保存并在 Usage Data 中逐项显示。美元金额是本地日志的 API 价格估算，不是订阅账单或官方额度消耗；未知价格留空，图表不再画成零。首次修正旧桶前会保存 `token-history-before-model-attribution.json` 备份。
-- 今日/30 天估算会保留已知金额：存在未定价模型时显示 `≥` 和具体模型说明；完整费用历史仍保留未知缺口。Top model 分为最近 10 个本地日历日（含今天）和 Today 两项，按 token 数排名，不受价格是否已知影响。
+- 今日/30 天卡片与每日费用曲线均保留已知金额：存在未定价模型时显示 `≥`、部分估算标记和具体模型说明；仅完全未知的费用保留曲线缺口。Top model 分为最近 10 个本地日历日（含今天）和 Today 两项，按 token 数排名，不受价格是否已知影响。
 - 设置新增 Usage Data，可查看 24h、7d、30d、90d、1 年和全部历史，以及模型/Provider 分布；可导出当前筛选的 CSV 或包含全部明细的 JSON，账本不会自动清理。
 - Manual、固定间隔和 Adaptive 刷新模式、打开菜单刷新、服务故障/恢复与额度阈值通知。
 - macOS 原生应用菜单、真实的 ⌘R / ⌘, / ⌘Q、滚动详情和 VoiceOver 描述。

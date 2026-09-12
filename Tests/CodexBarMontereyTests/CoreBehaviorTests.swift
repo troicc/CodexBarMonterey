@@ -3,6 +3,32 @@ import XCTest
 @testable import CodexBarMonterey
 
 final class CoreBehaviorTests: XCTestCase {
+    func testCostHistoryKeepsKnownSubtotalAndLabelsPartialEstimates() {
+        for provider in ["codex", "claude"] {
+            let model = provider == "claude" ? "claude-priced" : "gpt-priced"
+            let unpriced = provider == "claude" ? "claude-unknown" : "codex-auto-review"
+            let json = """
+            {"provider":"\(provider)","daily":[
+              {"date":"2026-09-08","totalTokens":100,"totalCost":99,"modelBreakdowns":[
+                {"modelName":"\(model)","totalTokens":80,"cost":3.5},
+                {"modelName":"\(unpriced)","totalTokens":20}]},
+              {"date":"2026-09-10","totalTokens":20,"modelsUsed":["\(unpriced)"],"modelBreakdowns":[
+                {"modelName":"\(unpriced)","totalTokens":20}]},
+              {"date":"2026-09-11","totalTokens":50,"totalCost":2,"modelsUsed":["\(model)"]}
+            ]}
+            """
+            let snapshot = ProviderSnapshot(provider: provider, version: nil, source: "test", status: nil,
+                usage: nil, credits: nil, account: nil, plan: nil, error: nil, rawJSON: "{}")
+            let history = DashboardParser.dashboard(snapshot: snapshot, supplementalJSON: json).history
+            XCTAssertEqual(history.map(\.spend), [3.5, 0, nil, 2])
+            XCTAssertEqual(history[0].spendEstimate?.isPartial, true)
+            XCTAssertEqual(history[0].spendEstimate?.unpricedModels, [unpriced])
+            XCTAssertNil(history[1].spendEstimate)
+            XCTAssertNil(history[2].spendEstimate?.knownCost)
+            XCTAssertEqual(history[3].spendEstimate?.isPartial, false)
+        }
+    }
+
     func testCostChartsKeepInactiveDaysAndUnknownPrices() {
         for provider in ["claude", "codex"] {
             let snapshot = ProviderSnapshot(provider: provider, version: nil, source: "test", status: nil,

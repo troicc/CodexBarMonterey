@@ -17,7 +17,7 @@ Included:
 - account-isolated local quota/spend history, plus an unpruned Application Support token ledger that imports Codex/Claude token components and z.ai hourly/model buckets;
 - Claude history attributed by actual model, with third-party Claude Code models retained separately from Claude and excluded from combined totals to avoid overlap with provider API history;
 - persistent Codex/Claude per-model token breakdowns, reconciled before splitting mixed days; unknown prices remain missing, and local API cost estimates are explicitly distinct from subscription bills or official quota use;
-- known cost subtotals remain visible with `≥` and unpriced-model details; top-model summaries separately rank the last 10 local calendar days (including today) and today by tokens;
+- known cost subtotals remain visible in summary cards and daily charts with `≥`, partial-estimate labels, and unpriced-model details; only fully unknown costs leave chart gaps. Top-model summaries separately rank the last 10 local calendar days (including today) and today by tokens;
 - a Settings → Usage Data page with 24h/7d/30d/90d/1y/all-time charts, provider/model breakdowns, visible CSV export, and full JSON export;
 - z.ai compact views prioritize and label the five-hour allowance while retaining MCP/monthly windows in full details;
 - universal arm64/x86_64 packaging;
