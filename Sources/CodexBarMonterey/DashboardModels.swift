@@ -21,13 +21,51 @@ struct DashboardHistoryPoint: Identifiable, Hashable {
     let spend: Double?
     let tokens: Double?
     let requests: Double?
+    let dayKey: String?
 
-    init(label: String, spend: Double? = nil, tokens: Double? = nil, requests: Double? = nil) {
-        self.id = label
+    init(label: String, spend: Double? = nil, tokens: Double? = nil, requests: Double? = nil, dayKey: String? = nil) {
+        self.id = dayKey ?? label
         self.label = label
         self.spend = spend
         self.tokens = tokens
         self.requests = requests
+        self.dayKey = dayKey
+    }
+
+    /// Preserve calendar spacing. Missing API samples are unknown unless the
+    /// caller has a complete local-log scan and explicitly supplies zeroes.
+    static func continuousDays(_ points: [Self], through: Date? = nil,
+                               missingTokens: Double? = nil, missingSpend: Double? = nil,
+                               limit: Int = 60) -> [Self] {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        var dated: [Date: Self] = [:]
+        for point in points {
+            guard let key = point.dayKey, key.count == 10,
+                  let date = formatter.date(from: key), formatter.string(from: date) == key,
+                  dated[date] == nil else { return points }
+            dated[date] = point
+        }
+        guard let first = dated.keys.min(), let last = dated.keys.max(), limit > 0 else { return points }
+        let calendar = formatter.calendar!
+        let end = max(last, through.map { calendar.startOfDay(for: $0) } ?? last)
+        var day = max(first, calendar.date(byAdding: .day, value: 1 - limit, to: end) ?? first)
+        let label = DateFormatter()
+        label.calendar = calendar
+        label.timeZone = formatter.timeZone
+        label.locale = formatter.locale
+        label.dateFormat = "MMM d"
+        var result: [Self] = []
+        while day <= end {
+            result.append(dated[day] ?? Self(label: label.string(from: day), spend: missingSpend,
+                tokens: missingTokens, dayKey: formatter.string(from: day)))
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day), next > day else { break }
+            day = next
+        }
+        return result
     }
 }
 struct DashboardQuotaLane: Identifiable, Hashable {
@@ -143,6 +181,13 @@ struct ProviderDashboard: Identifiable, Hashable {
     let serviceStatus: ProviderStatus?
     let dashboardURL: URL?
     let statusURL: URL?
+    var topModel10Days: String? = nil
+    var topModelToday: String? = nil
+
+    var showsTopModels: Bool {
+        topModel10Days != nil || topModelToday != nil || ["claude", "codex", "zai"].contains(id)
+    }
+
     static func loading(providerID: String, title: String) -> ProviderDashboard {
         ProviderDashboard(
             id: providerID,

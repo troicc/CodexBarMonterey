@@ -32,3 +32,23 @@ swiftc \
   "$TMP/main.swift" \
   -o "$TMP/local-spend-regression"
 "$TMP/local-spend-regression"
+
+cp "$ROOT/Scripts/token_history_store_regression.swift" "$TMP/main.swift"
+swiftc \
+  -module-cache-path "$MODULE_CACHE" \
+  "$ROOT/Sources/CodexBarMonterey/Models.swift" \
+  "$ROOT/Sources/CodexBarMonterey/CostHistoryPayload.swift" \
+  "$ROOT/Sources/CodexBarMonterey/LocalTokenHistoryStore.swift" \
+  "$TMP/main.swift" \
+  -o "$TMP/token-history-regression"
+"$TMP/token-history-regression"
+
+cp "$ROOT/Scripts/model_attribution_regression.swift" "$TMP/main.swift"
+swiftc \
+  -module-cache-path "$MODULE_CACHE" \
+  "$ROOT/Sources/CodexBarMonterey/Models.swift" \
+  "$ROOT/Sources/CodexBarMonterey/CostHistoryPayload.swift" \
+  "$ROOT/Sources/CodexBarMonterey/LocalTokenHistoryStore.swift" \
+  "$TMP/main.swift" \
+  -o "$TMP/model-attribution-regression"
+"$TMP/model-attribution-regression"

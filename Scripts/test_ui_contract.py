@@ -10,7 +10,6 @@ menu = (SOURCES / "MenuController.swift").read_text()
 native_menu = (SOURCES / "NativeMenuViews.swift").read_text()
 alerts = (SOURCES / "ProviderAlertController.swift").read_text()
 preferences = (SOURCES / "Preferences.swift").read_text()
-popover = (SOURCES / "DashboardPopoverController.swift").read_text()
 views = (SOURCES / "DashboardViews.swift").read_text()
 settings = (SOURCES / "SettingsWindowController.swift").read_text()
 details = (SOURCES / "DetailsWindowController.swift").read_text()
@@ -21,14 +20,14 @@ store = (SOURCES / "DashboardStore.swift").read_text()
 cost_payload = (SOURCES / "CostHistoryPayload.swift").read_text()
 quota_trend = (SOURCES / "LocalQuotaTrendStore.swift").read_text()
 local_spend = (SOURCES / "LocalSpendHistoryStore.swift").read_text()
+token_history = (SOURCES / "LocalTokenHistoryStore.swift").read_text()
 models = (SOURCES / "Models.swift").read_text()
 provider_auth = (SOURCES / "ProviderAuthentication.swift").read_text()
 config_store = (SOURCES / "CodexBarConfigStore.swift").read_text()
 
-# The primary interaction is a real macOS status menu. The graphical popover is
-# retained as an explicit deep-dashboard action rather than being the default click.
-assert "NSPopover" in popover
-assert "DashboardPopoverView" in popover
+# The primary interaction is a real macOS status menu. The redundant fixed-dark
+# multi-provider popover is gone; only the native provider-detail popover remains.
+assert not (SOURCES / "DashboardPopoverController.swift").exists()
 assert "NSMenuDelegate" in menu
 assert "item.menu = menu" in menu
 assert "menuWillOpen" in menu
@@ -36,7 +35,8 @@ assert "populateOverviewMenu" in menu
 assert "populateProviderMenu" in menu
 assert "NativeMenuOverviewView" in native_menu
 assert "NativeMenuProviderCardView" in native_menu
-assert "Open Dashboard Popover" in menu
+assert "Open Dashboard Popover" not in menu
+assert "openDashboardPopoverMenuItem" not in menu
 assert "statusButtonClicked" not in menu
 assert "NSApp.mainMenu = mainMenu" in menu
 assert "setAccessibilityLabel" in menu
@@ -59,9 +59,9 @@ assert "runtimeSmokeReport" in menu
 assert 'failures.append("provider detail popover did not open")' in menu
 assert "CODEXBAR_MONTEREY_UI_SMOKE_OUTPUT" in (SOURCES / "AppDelegate.swift").read_text()
 
-# Original-style UI contract: provider switcher, summary card, charts, actions.
+# Dashboard UI contract: summary cards, history charts, actions, and the native
+# provider detail remain available without the duplicate fixed-dark popover.
 for token in [
-    "ProviderSwitcherButton",
     "DashboardSummaryCard",
     "MiniHistoryChart",
     "LiveProviderDetailPopoverView",
@@ -74,11 +74,17 @@ for token in [
     assert token in views, token
 
 # Provider detail is anchored to the status item as a transient popover. The
-# separate all-provider window remains available for the overview dashboard.
+# all-provider overview uses the same system-native popover interaction.
 assert "AllProvidersDashboardView" in details
 assert "NSTextView.scrollableTextView" not in details
 assert "setFrameAutosaveName" in settings
-assert "setFrameAutosaveName" in details
+assert "NSPopover" in details
+assert "NSWindowController" not in details
+assert "relativeTo button: NSStatusBarButton" in details
+all_provider_view = views[views.index("struct AllProvidersDashboardView:"):]
+assert "preferredColorScheme(.dark)" not in all_provider_view
+assert "AllProvidersContentView" in all_provider_view
+assert "windowBackgroundColor" in all_provider_view
 assert "NSPopover" in detail_popover
 assert "NSWindowController" not in detail_popover
 assert "LiveProviderDetailPopoverView" in detail_popover
@@ -147,6 +153,7 @@ assert "last30DaysCostUSD" in cost_payload
 assert "resolvedTodayTokens" in cost_payload
 assert 'title: "Today tokens"' in parser
 assert "LocalQuotaTrendStore" in store
+assert "LocalTokenHistoryStore" in store
 assert 'snapshot.provider == "zai"' in quota_trend
 assert 'zai-five-hour-trend-v3.json' in quota_trend
 assert 'snapshot.headlineUsedPercent' in quota_trend
@@ -160,6 +167,7 @@ assert "usedPercent: snapshot.headlineUsedPercent" in menu
 assert "quotaLabel: snapshot.headlineQuotaLabel" in menu
 assert "quota_trend_store_regression.swift" in (ROOT / "Scripts" / "test_cost_history_parser.sh").read_text()
 assert "local_spend_history_regression.swift" in (ROOT / "Scripts" / "test_cost_history_parser.sh").read_text()
+assert "token_history_store_regression.swift" in (ROOT / "Scripts" / "test_cost_history_parser.sh").read_text()
 assert "maximumAttributableInterval" in local_spend
 assert "unattributedIntervals" in local_spend
 assert "calendar.isDate(previous.timestamp, inSameDayAs: next.timestamp)" in local_spend
@@ -170,7 +178,20 @@ assert "usage?.accountEmail" in models
 # quota percentages as token history.
 assert "private static func zaiPayload" in parser
 assert 'dictionary(named: "zaiUsage"' in parser
-assert 'title: "24h tokens"' in parser
+assert 'title: "30d tokens"' in parser
+assert 'dictionary(named: "localTokenHistory"' in parser
+assert 'zai.modelUsage' in token_history
+assert 'token-history-v1.json' in token_history
+assert 'applicationSupportDirectory' in token_history
+assert 'hasFull30DayCoverage' in token_history
+assert 'Quota percentages are stored separately' in settings
+assert 'case usageData = "Usage Data"' in settings
+assert 'Export visible CSV' in settings
+assert 'Export full JSON' in settings
+assert 'case all' in token_history
+assert 'case year' in token_history
+assert 'recordsByID[candidate.id]' in token_history
+assert 'suffix(' not in token_history
 assert 'value: "Not exposed"' in parser
 assert 'title: "5-hour trend"' not in parser
 assert "Local 5-hour samples" not in views
@@ -178,7 +199,7 @@ assert 'title: "Hourly tokens"' in views
 assert 'title: "5h quota used"' in views
 assert 'fixedMaximum: 100' in views
 assert 'title: "Daily tokens"' in views
-assert 'title: "Daily cost"' in views
+assert '"Daily estimated cost" : "Daily cost"' in views
 assert "Each chart is labeled and scaled independently." in views
 assert "resolvedHistoryValues" not in views
 assert "historyContext: historyContext" in parser
@@ -198,12 +219,11 @@ assert '["--provider", provider, "--format", "json"' not in client
 
 # Swift 6.3 requires StrokeStyle labels in declaration order. Catch the exact
 # ordering bug before the macOS build step.
-assert "StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round)" in views
+assert "StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)" in views
 assert "StrokeStyle(lineWidth: 3, lineJoin: .round, lineCap: .round)" not in views
 
-# The Monterey popover must stay close to the compact original menu footprint,
-# use a dark-blue material overlay, and avoid provider-colored full-card fills.
-assert "NSSize(width: 328, height: 520)" in popover
+# The optional all-provider details window may retain its dark-blue overview,
+# while the duplicate menu popover and its controller stay removed.
 assert "DashboardTheme.backgroundTop" in views
 assert "DashboardTheme.selection.opacity(0.88)" in views
 assert "DashboardTheme.cardStart" in views

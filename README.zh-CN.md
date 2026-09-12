@@ -15,8 +15,14 @@
 - 合并菜单栏图标或每 provider 独立图标；状态项可显示 meter、已用百分比、剩余百分比或 provider 图标。
 - Session/weekly/extra quota、重置时间、credits、状态、账号、套餐和错误信息。
 - 紧凑的图形化 provider 总览，以及直接锚定菜单栏图标、跟随系统外观的详情 popover；数据仍来自上游 CLI JSON，原始输出可直接通过内置 helper 查询。
+- 删除信息重复且固定深色的旧 Dashboard Popover 菜单入口；单 Provider 详情与全部 Provider 总览均改为锚定菜单栏图标、跟随系统外观的原生弹窗。
 - 默认左键直接打开 macOS 原生状态菜单；菜单内包含可配置 Overview、Provider/账号子菜单、指标、额度、重置时间、pace 和服务状态。z.ai 的紧凑主值明确优先显示 5h 额度，MCP/月度窗口仍保留在完整详情中。
 - 详情历史图分别标明 tokens、cost、requests 或 5h quota；有两类数据时使用独立图表和刻度，不再用柱图、折线重复表达同一序列。
+- 智谱 z.ai 的逐小时/逐模型 token 会按时间戳去重并永久保存在 Application Support，逐步形成真实的 30 天与全时段本地历史；Codex/Claude 的 input、output、cache read、cache creation 和 total 日数据也会长期入账，不把 5h quota 百分比伪装成 token。
+- Claude 历史按实际模型归属统计：GLM 等第三方模型保留为独立的「Claude Code · Other models」数据来源，不混入 Claude，也不与 z.ai API 数据重复合并。混用日期只有在模型 token 明细与日总量一致时才拆分；未知归属单独保留。
+- Codex/Claude 的模型 token 明细会持久保存并在 Usage Data 中逐项显示。美元金额是本地日志的 API 价格估算，不是订阅账单或官方额度消耗；未知价格留空，图表不再画成零。首次修正旧桶前会保存 `token-history-before-model-attribution.json` 备份。
+- 今日/30 天估算会保留已知金额：存在未定价模型时显示 `≥` 和具体模型说明；完整费用历史仍保留未知缺口。Top model 分为最近 10 个本地日历日（含今天）和 Today 两项，按 token 数排名，不受价格是否已知影响。
+- 设置新增 Usage Data，可查看 24h、7d、30d、90d、1 年和全部历史，以及模型/Provider 分布；可导出当前筛选的 CSV 或包含全部明细的 JSON，账本不会自动清理。
 - Manual、固定间隔和 Adaptive 刷新模式、打开菜单刷新、服务故障/恢复与额度阈值通知。
 - macOS 原生应用菜单、真实的 ⌘R / ⌘, / ⌘Q、滚动详情和 VoiceOver 描述。
 - 账户隔离的本地 quota/余额差历史；无法可靠归属的长间隔不会冒充当天消费。
@@ -24,7 +30,7 @@
 - Sparkle 2.9.4 整包更新集成；真正可工作的安全自动更新仍要求仓库配置真实密钥和签名 appcast。
 - Universal 2：Intel 与 Apple Silicon。
 - LaunchAgent 登录启动，避免依赖 macOS 13 的 `SMAppService`。
-- 每日检查 CodexBar 上游 release，自动创建升级 PR。
+- 每日检查 CodexBar 上游 release；自动创建升级 PR 还要求仓库开启“Allow GitHub Actions to create and approve pull requests”。
 
 ### 不伪装成已经完全复刻
 

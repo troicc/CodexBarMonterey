@@ -26,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 NSApp.terminate(nil)
             }
+        } else if ProcessInfo.processInfo.environment["CODEXBAR_MONTEREY_VISUAL_QA_USAGE_DATA"] == "1" {
+            Task { @MainActor [weak self] in
+                await self?.menuController?.showTokenHistoryForVisualQA()
+            }
         }
     }
 

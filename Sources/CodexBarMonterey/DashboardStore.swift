@@ -10,6 +10,7 @@ final class DashboardStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastError: String?
     @Published private(set) var lastSuccessfulRefresh: Date?
+    @Published private(set) var tokenHistoryRevision = 0
 
     private let client: CLIClient
     var onOpenSettings: (() -> Void)?
@@ -26,9 +27,14 @@ final class DashboardStore: ObservableObject {
     private var snapshotGeneration = 0
     private let quotaTrendStore = LocalQuotaTrendStore()
     private let spendHistoryStore = LocalSpendHistoryStore()
+    private let tokenHistoryStore: LocalTokenHistoryStore
 
-    init(client: CLIClient) {
+    init(
+        client: CLIClient,
+        tokenHistoryStore: LocalTokenHistoryStore = LocalTokenHistoryStore()
+    ) {
         self.client = client
+        self.tokenHistoryStore = tokenHistoryStore
     }
     var selectedSnapshot: ProviderSnapshot? {
         guard let selectedProviderID = selectedProviderID else { return snapshots.first }
@@ -74,6 +80,7 @@ final class DashboardStore: ObservableObject {
             supplementalJSONByProvider = supplementalJSONByProvider.filter {
                 currentProviderIDs.contains($0.key)
             }
+            let tokenRevisionBeforeRefresh = tokenHistoryStore.revision
             var rebuilt: [String: ProviderDashboard] = [:]
             for snapshot in snapshots {
                 let cachedSupplement = cachedSupplement(for: snapshot)
@@ -81,14 +88,21 @@ final class DashboardStore: ObservableObject {
                 let localSpend = spendHistoryStore.record(
                     snapshot: snapshot,
                     supplementalJSON: cachedSupplement)
+                let localTokens = tokenHistoryStore.record(
+                    snapshot: snapshot,
+                    supplementalJSON: cachedSupplement)
                 let combinedSupplement = Self.combinedSupplementalJSON(
                     cachedSupplement,
                     localQuota,
-                    localSpend)
+                    localSpend,
+                    localTokens)
                 let dashboard = DashboardParser.dashboard(
                     snapshot: snapshot,
                     supplementalJSON: combinedSupplement)
                 rebuilt[snapshot.id] = dashboard
+            }
+            if tokenHistoryStore.revision != tokenRevisionBeforeRefresh {
+                tokenHistoryRevision = tokenHistoryStore.revision
             }
             dashboards = rebuilt
             if let selectedProviderID = selectedProviderID,
@@ -98,7 +112,19 @@ final class DashboardStore: ObservableObject {
             } else if self.selectedProviderID == nil {
                 self.selectedProviderID = snapshots.first?.id
             }
-            if let snapshot = selectedSnapshot {
+            // Codex and Claude expose dated token components through the local
+            // cost scanner rather than the enabled-provider payload. Enrich
+            // both on every successful refresh so long-term retention does not
+            // depend on which provider the user happened to open.
+            let historySnapshots = snapshots.filter {
+                $0.provider == "codex" || $0.provider == "claude"
+            }
+            for snapshot in historySnapshots {
+                await enrichDashboard(for: snapshot)
+            }
+            if let snapshot = selectedSnapshot,
+               !historySnapshots.contains(where: { $0.id == snapshot.id })
+            {
                 await enrichDashboard(for: snapshot)
             }
             lastError = nil
@@ -162,10 +188,18 @@ final class DashboardStore: ObservableObject {
         let localSpend = spendHistoryStore.record(
             snapshot: snapshot,
             supplementalJSON: cachedSupplement)
+        let tokenRevisionBeforeEnrichment = tokenHistoryStore.revision
+        let localTokens = tokenHistoryStore.record(
+            snapshot: snapshot,
+            supplementalJSON: cachedSupplement)
+        if tokenHistoryStore.revision != tokenRevisionBeforeEnrichment {
+            tokenHistoryRevision = tokenHistoryStore.revision
+        }
         let resolvedSupplement = Self.combinedSupplementalJSON(
             cachedSupplement,
             localQuota,
-            localSpend)
+            localSpend,
+            localTokens)
         let dashboard = DashboardParser.dashboard(
             snapshot: snapshot,
             supplementalJSON: resolvedSupplement)
@@ -183,6 +217,39 @@ final class DashboardStore: ObservableObject {
     func openStatusURL() {
         guard let url = selectedDashboard?.statusURL else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    var tokenHistoryAccounts: [TokenHistoryAccount] {
+        tokenHistoryStore.accounts()
+    }
+
+    var tokenHistoryStorageURL: URL {
+        tokenHistoryStore.fileURL
+    }
+
+    var tokenHistoryPersistenceError: String? {
+        tokenHistoryStore.persistenceError
+    }
+
+    func tokenHistoryReport(
+        accountID: String?,
+        range: TokenHistoryRange
+    ) -> TokenHistoryReport {
+        tokenHistoryStore.report(accountID: accountID, range: range)
+    }
+
+    func tokenHistoryCSV(
+        accountID: String?,
+        range: TokenHistoryRange?
+    ) -> String {
+        tokenHistoryStore.exportCSV(accountID: accountID, range: range)
+    }
+
+    func tokenHistoryJSON(
+        accountID: String?,
+        range: TokenHistoryRange?
+    ) throws -> Data {
+        try tokenHistoryStore.exportJSON(accountID: accountID, range: range)
     }
     private func cachedSupplement(for snapshot: ProviderSnapshot) -> String? {
         // Provider-level fallback is safe only when that provider has a single

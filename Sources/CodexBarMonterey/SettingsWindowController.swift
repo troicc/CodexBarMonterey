@@ -26,12 +26,92 @@ final class SettingsWindowController: NSWindowController {
 
     required init?(coder: NSCoder) { nil }
 
-    func show(selectedProviderID: String? = nil) {
+    func show(
+        selectedProviderID: String? = nil,
+        selectedTab: SettingsStore.Tab? = nil
+    ) {
         if let selectedProviderID = selectedProviderID { store.requestSelection(selectedProviderID) }
+        if let selectedTab = selectedTab { store.tab = selectedTab }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         if !store.isBusy { Task { @MainActor in await store.reloadProviders() } }
+    }
+
+    func prepareTokenHistoryVisualQA() {
+        let appearance = ProcessInfo.processInfo.environment["CODEXBAR_MONTEREY_VISUAL_QA_APPEARANCE"] == "dark"
+            ? NSAppearance(named: .darkAqua)
+            : NSAppearance(named: .aqua)
+        // SwiftUI resolves several semantic colors from the application-level
+        // appearance. Set both scopes so the source-level snapshot exercises
+        // the same light/dark environment as the live window.
+        NSApp.appearance = appearance
+        window?.appearance = appearance
+        window?.setContentSize(NSSize(width: 980, height: 680))
+        show(selectedTab: .usageData)
+    }
+
+    func tokenHistoryVisualQAReport() -> String {
+        guard let window = window, let content = window.contentView else {
+            return "FAIL: settings window or content view missing"
+        }
+        window.layoutIfNeeded()
+        content.layoutSubtreeIfNeeded()
+        content.displayIfNeeded()
+
+        var failures: [String] = []
+        if content.bounds.width < 900 || content.bounds.height < 620 {
+            failures.append("content viewport is smaller than 900x620")
+        }
+        let descendants = Self.descendants(of: content)
+        let scrollViews = descendants.compactMap { $0 as? NSScrollView }
+        let primaryScroll = scrollViews.max {
+            ($0.bounds.width * $0.bounds.height) < ($1.bounds.width * $1.bounds.height)
+        }
+        if let primaryScroll = primaryScroll {
+            let frame = content.convert(primaryScroll.bounds, from: primaryScroll)
+            if frame.width < 600 || frame.height < 500 {
+                failures.append("primary history scroll viewport is smaller than 600x500")
+            }
+        } else {
+            failures.append("token history scroll view missing")
+        }
+        return failures.isEmpty
+            ? "PASS | viewport=\(Int(content.bounds.width))x\(Int(content.bounds.height)) scrollViews=\(scrollViews.count)"
+            : "FAIL: \(failures.joined(separator: "; "))"
+    }
+
+    func writeTokenHistoryVisualQASnapshot(to output: URL) throws {
+        guard let window = window, let content = window.contentView else {
+            throw NSError(
+                domain: "CodexBarMonterey.VisualQA",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Settings window or content view is missing."])
+        }
+        window.layoutIfNeeded()
+        content.layoutSubtreeIfNeeded()
+        content.displayIfNeeded()
+        guard let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else {
+            throw NSError(
+                domain: "CodexBarMonterey.VisualQA",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Could not allocate a settings bitmap."])
+        }
+        content.cacheDisplay(in: content.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
+            throw NSError(
+                domain: "CodexBarMonterey.VisualQA",
+                code: 3,
+                userInfo: [NSLocalizedDescriptionKey: "Could not encode the settings bitmap as PNG."])
+        }
+        try FileManager.default.createDirectory(
+            at: output.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try png.write(to: output, options: .atomic)
+    }
+
+    private static func descendants(of view: NSView) -> [NSView] {
+        view.subviews + view.subviews.flatMap { descendants(of: $0) }
     }
 }
 
@@ -41,6 +121,7 @@ final class SettingsStore: ObservableObject {
         case general = "General"
         case menuBar = "Menu Bar"
         case notifications = "Notifications"
+        case usageData = "Usage Data"
         case providers = "Providers"
         case advanced = "Advanced"
         var id: String { rawValue }
@@ -50,6 +131,7 @@ final class SettingsStore: ObservableObject {
             case .general: return "gearshape"
             case .menuBar: return "menubar.rectangle"
             case .notifications: return "bell"
+            case .usageData: return "chart.bar"
             case .providers: return "square.grid.2x2"
             case .advanced: return "wrench.and.screwdriver"
             }
@@ -555,6 +637,7 @@ private struct SettingsRootView: View {
                 case .general: GeneralSettingsView(store: store)
                 case .menuBar: MenuBarSettingsView(store: store)
                 case .notifications: NotificationSettingsView(store: store)
+                case .usageData: TokenHistorySettingsView(dashboardStore: dashboardStore)
                 case .providers: ProviderSettingsView(store: store, dashboardStore: dashboardStore)
                 case .advanced: AdvancedSettingsView(store: store)
                 }
@@ -562,6 +645,7 @@ private struct SettingsRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 900, minHeight: 620)
+        .background(Color(nsColor: .windowBackgroundColor))
         .task {
             if !store.isBusy { await store.reloadProviders() }
         }
@@ -1059,6 +1143,384 @@ private struct ProviderSettingsRow: View {
         .padding(.horizontal, 6)
         .background(RoundedRectangle(cornerRadius: 7).fill(selected ? Color.accentColor.opacity(0.18) : Color.clear))
     }
+}
+
+struct TokenHistorySettingsView: View {
+    @ObservedObject var dashboardStore: DashboardStore
+    @State private var selectedAccountID = ""
+    @State private var range: TokenHistoryRange = .thirtyDays
+    @State private var exportStatus: String?
+
+    init(dashboardStore: DashboardStore, selectedAccountID: String = "") {
+        self.dashboardStore = dashboardStore
+        _selectedAccountID = State(initialValue: selectedAccountID)
+    }
+
+    private var accountID: String? {
+        selectedAccountID.isEmpty ? nil : selectedAccountID
+    }
+
+    private var report: TokenHistoryReport {
+        // Reading the revision makes this derived report refresh immediately
+        // when a provider poll adds or corrects dated token buckets.
+        _ = dashboardStore.tokenHistoryRevision
+        return dashboardStore.tokenHistoryReport(accountID: accountID, range: range)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                SettingsPageTitle(
+                    title: "Usage Data",
+                    subtitle: "Long-term token history, every available token component, and portable exports")
+
+                HStack(spacing: 14) {
+                    Picker("Account", selection: $selectedAccountID) {
+                        Text("All providers & accounts").tag("")
+                        ForEach(dashboardStore.tokenHistoryAccounts) { account in
+                            Text(account.displayName).tag(account.id)
+                        }
+                    }
+                    .frame(maxWidth: 360)
+
+                    Picker("Range", selection: $range) {
+                        ForEach(TokenHistoryRange.allCases) { range in
+                            Text(range.title).tag(range)
+                        }
+                    }
+                    .pickerStyle(SegmentedPickerStyle())
+                    .frame(maxWidth: 360)
+                }
+
+                Text("Claude and Codex show local model usage, not official quota consumption or invoices. Other Claude Code models are kept separately and excluded from the combined total to avoid overlap with provider API data. Mixed days without model token counts remain unattributed. Token components appear only when complete.")
+                    .font(.system(size: 11)).foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if report.recordCount == 0 {
+                    TokenHistoryEmptyState()
+                } else {
+                    LazyVGrid(
+                        columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                        spacing: 10)
+                    {
+                        TokenHistoryStatCard(
+                            title: "\(range.title) tokens",
+                            value: tokenHistoryCompactNumber(report.totalTokens),
+                            detail: "\(report.recordCount) dated buckets")
+                        TokenHistoryStatCard(
+                            title: "Today",
+                            value: tokenHistoryCompactNumber(report.todayTokens),
+                            detail: "Local calendar day")
+                        TokenHistoryStatCard(
+                            title: "30 days",
+                            value: tokenHistoryCompactNumber(report.last30DaysTokens),
+                            detail: tokenHistoryCoverageDetail(report))
+                        TokenHistoryStatCard(
+                            title: "All time",
+                            value: tokenHistoryCompactNumber(report.allTimeTokens),
+                            detail: "Never auto-pruned")
+                    }
+
+                    HStack(alignment: .top, spacing: 12) {
+                        if !report.modelTotals.isEmpty {
+                            TokenHistoryBreakdownBox(
+                                title: "Models",
+                                rows: report.modelTotals)
+                        }
+                        if report.providerTotals.count > 1 {
+                            TokenHistoryBreakdownBox(
+                                title: "Providers",
+                                rows: report.providerTotals)
+                        }
+                    }
+
+                    GroupBox(label: Text("Token volume · \(range.title)").font(.headline)) {
+                        TokenHistoryBarChart(points: report.chart)
+                            .padding(12)
+                    }
+
+                    if report.components.hasData {
+                        GroupBox(label: Text("Token components · \(range.title)").font(.headline)) {
+                            LazyVGrid(
+                                columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4),
+                                spacing: 10)
+                            {
+                                TokenHistoryComponentCell(title: "Input", value: report.components.input)
+                                TokenHistoryComponentCell(title: "Output", value: report.components.output)
+                                TokenHistoryComponentCell(title: "Cache read", value: report.components.cacheRead)
+                                TokenHistoryComponentCell(title: "Cache creation", value: report.components.cacheCreation)
+                            }
+                            .padding(12)
+                        }
+                    }
+
+
+                }
+
+                GroupBox(label: Text("Retention & export").font(.headline)) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Dated token buckets are merged by provider, account, time, and model in Application Support. Existing buckets are updated in place and are never automatically deleted. Quota percentages are stored separately and are not counted as tokens.")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(dashboardStore.tokenHistoryStorageURL.path)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+
+                        HStack(spacing: 10) {
+                            Button("Export visible CSV…", action: exportVisibleCSV)
+                            Button("Export full JSON…", action: exportFullJSON)
+                            Button("Show data file", action: revealDataFile)
+                            Spacer()
+                        }
+
+                        if let persistenceError = dashboardStore.tokenHistoryPersistenceError {
+                            Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let exportStatus = exportStatus {
+                            Text(exportStatus)
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .padding(12)
+                }
+            }
+            .padding(28)
+        }
+    }
+
+    private func exportVisibleCSV() {
+        let csv = dashboardStore.tokenHistoryCSV(accountID: accountID, range: range)
+        save(
+            data: Data(csv.utf8),
+            suggestedName: "codexbar-token-history-\(range.rawValue).csv")
+    }
+
+    private func exportFullJSON() {
+        do {
+            let data = try dashboardStore.tokenHistoryJSON(accountID: nil, range: nil)
+            save(
+                data: data,
+                suggestedName: "codexbar-token-history-full.json")
+        } catch {
+            exportStatus = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func save(data: Data, suggestedName: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            try data.write(to: destination, options: .atomic)
+            exportStatus = "Exported \(destination.lastPathComponent)"
+        } catch {
+            exportStatus = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func revealDataFile() {
+        let fileURL = dashboardStore.tokenHistoryStorageURL
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+        } else {
+            NSWorkspace.shared.open(fileURL.deletingLastPathComponent())
+        }
+    }
+}
+
+private struct TokenHistoryEmptyState: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "chart.bar")
+                .font(.system(size: 32))
+                .foregroundColor(.secondary)
+            Text("No dated token history in this range")
+                .font(.system(size: 15, weight: .semibold))
+            Text("Refresh a provider that exposes dated token usage. Codex and Claude import their current daily history; z.ai imports its rolling hourly model data and keeps it permanently from then on.")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 42)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.55)))
+    }
+}
+
+private struct TokenHistoryStatCard: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.system(size: 20, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(detail)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(11)
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.72)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1))
+    }
+}
+
+private struct TokenHistoryComponentCell: View {
+    let title: String
+    let value: Double?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.secondary)
+            Text(value.map(tokenHistoryCompactNumber) ?? "—")
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct TokenHistoryBreakdownBox: View {
+    let title: String
+    let rows: [TokenHistoryNamedTotal]
+
+    var body: some View {
+        GroupBox(label: Text(title).font(.headline)) {
+            VStack(spacing: 8) {
+                ForEach(rows) { row in
+                    HStack(spacing: 10) {
+                        Text(row.name)
+                            .font(.system(size: 11))
+                            .lineLimit(1)
+                        Spacer()
+                        Text(tokenHistoryCompactNumber(row.tokens))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .help(String(format: "%.0f tokens", row.tokens))
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct TokenHistoryBarChart: View {
+    let points: [TokenHistoryChartPoint]
+
+    private var maximum: Double {
+        max(1, points.map(\.tokens).max() ?? 1)
+    }
+
+    var body: some View {
+        VStack(spacing: 7) {
+            GeometryReader { geometry in
+                ZStack(alignment: .bottomLeading) {
+                    VStack(spacing: 0) {
+                        ForEach(0..<4) { index in
+                            if index > 0 { Spacer() }
+                            Divider().opacity(0.45)
+                        }
+                    }
+                    HStack(alignment: .bottom, spacing: points.count > 60 ? 1 : 3) {
+                        ForEach(points) { point in
+                            TokenHistoryBar(point: point, maximum: maximum,
+                                height: geometry.size.height, dense: points.count > 60)
+                        }
+                    }
+                }
+            }
+            .frame(height: 176)
+
+            HStack {
+                Text(points.first?.label ?? "")
+                Spacer()
+                if points.count > 2 { Text(points[points.count / 2].label) }
+                Spacer()
+                Text(points.last?.label ?? "")
+            }
+            .font(.system(size: 9))
+            .foregroundColor(.secondary)
+        }
+    }
+}
+
+private struct TokenHistoryBar: View {
+    let point: TokenHistoryChartPoint
+    let maximum: Double
+    let height: CGFloat
+    let dense: Bool
+
+    private var valueText: String {
+        point.hasRecords ? "\(tokenHistoryCompactNumber(point.tokens)) tokens" : "No recorded data"
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: dense ? 1 : 2)
+            .fill(Color.accentColor.opacity(0.82))
+            .frame(maxWidth: .infinity)
+            .frame(height: point.tokens > 0 ? max(2, CGFloat(point.tokens / maximum) * height) : 0)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .contentShape(Rectangle())
+            .accessibilityLabel(point.label)
+            .accessibilityValue(valueText)
+            .help("\(point.label): \(valueText)")
+    }
+}
+
+private func tokenHistoryCoverageDetail(_ report: TokenHistoryReport) -> String {
+    guard let first = report.firstRecordedAt else { return "No local coverage" }
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "MMM d, yyyy"
+    return "Since \(formatter.string(from: first))"
+}
+
+private func tokenHistoryCompactNumber(_ value: Double) -> String {
+    guard value.isFinite else { return "—" }
+    let absolute = abs(value)
+    let divisor: Double
+    let suffix: String
+    switch absolute {
+    case 1_000_000_000...:
+        divisor = 1_000_000_000
+        suffix = "B"
+    case 1_000_000...:
+        divisor = 1_000_000
+        suffix = "M"
+    case 1_000...:
+        divisor = 1_000
+        suffix = "K"
+    default:
+        return String(format: "%.0f", value)
+    }
+    let scaled = value / divisor
+    return String(format: scaled >= 100 ? "%.0f%@" : (scaled >= 10 ? "%.1f%@" : "%.2f%@"), scaled, suffix)
 }
 
 private struct AdvancedSettingsView: View {

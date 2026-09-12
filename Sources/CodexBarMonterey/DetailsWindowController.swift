@@ -2,33 +2,26 @@
 import SwiftUI
 
 @MainActor
-final class DetailsWindowController: NSWindowController {
+final class DetailsWindowController: NSObject {
     private let store: DashboardStore
+    private let popover = NSPopover()
 
     init(store: DashboardStore) {
         self.store = store
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 560),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
-            backing: .buffered,
-            defer: false)
-        window.title = "CodexBar Provider Details"
-        let frameName = "CodexBarMonterey.AllProvidersWindow"
-        if !window.setFrameUsingName(frameName) { window.center() }
-        window.setFrameAutosaveName(frameName)
-        window.isReleasedWhenClosed = false
-        super.init(window: window)
+        super.init()
+        popover.behavior = .transient
+        popover.animates = true
     }
 
-    required init?(coder: NSCoder) { nil }
+    var isShown: Bool { popover.isShown }
 
-    func show() {
-        guard let window = window else { return }
-        window.title = "All Enabled Providers — Full Usage Details"
-        window.contentViewController = NSHostingController(
-            rootView: AllProvidersDashboardView(store: store))
-        showWindow(nil)
-        window.makeKeyAndOrderFront(nil)
+    func show(relativeTo button: NSStatusBarButton) {
+        let available = button.window?.screen?.visibleFrame.size ?? NSSize(width: 1024, height: 768)
+        popover.contentSize = NSSize(width: min(620, available.width - 40), height: min(680, available.height - 70))
+        popover.contentViewController = NSHostingController(rootView: AllProvidersDashboardView(store: store))
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    func close() { popover.performClose(nil) }
 }

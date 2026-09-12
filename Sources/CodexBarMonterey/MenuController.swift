@@ -8,7 +8,6 @@ final class MenuController: NSObject, NSMenuDelegate {
     private let client: CLIClient
     private let updater: UpdaterController
     private let store: DashboardStore
-    private let popover: DashboardPopoverController
     private let detailPopover: ProviderDetailPopoverController
     private let alertController = ProviderAlertController()
 
@@ -31,28 +30,26 @@ final class MenuController: NSObject, NSMenuDelegate {
         self.updater = updater
         let dashboardStore = DashboardStore(client: client)
         self.store = dashboardStore
-        self.popover = DashboardPopoverController(store: dashboardStore)
         self.detailPopover = ProviderDetailPopoverController(store: dashboardStore)
         super.init()
         alertController.prepareAuthorizationIfNeeded()
 
         store.onOpenSettings = { [weak self] in
-            self?.popover.close()
             self?.detailPopover.close()
+            self?.details.close()
             self?.settings.show(selectedProviderID: self?.store.selectedSnapshot?.provider)
         }
         store.onOpenAllDetails = { [weak self] in
-            self?.popover.close()
-            self?.details.show()
+            self?.openAllDetailsMenuItem()
         }
         store.onOpenProviderDetails = { [weak self] snapshotID in
             guard let self = self,
                   let snapshot = self.store.snapshots.first(where: { $0.id == snapshotID }),
                   let button = self.lastStatusButton
             else { return }
-            self.popover.close()
             DispatchQueue.main.async { [weak self, weak button] in
                 guard let self = self, let button = button else { return }
+                self.details.close()
                 self.detailPopover.show(snapshot: snapshot, relativeTo: button)
             }
         }
@@ -80,7 +77,9 @@ final class MenuController: NSObject, NSMenuDelegate {
         rebuildStatusItems()
         renderStatusItems()
         installApplicationMenu()
-        Task { await refresh() }
+        if ProcessInfo.processInfo.environment["CODEXBAR_MONTEREY_VISUAL_QA_USAGE_DATA"] != "1" {
+            Task { await refresh() }
+        }
     }
 
     deinit {
@@ -388,12 +387,6 @@ final class MenuController: NSObject, NSMenuDelegate {
             action: #selector(openProviderDetailsMenuItem(_:)),
             representedObject: snapshot.id,
             symbol: "chart.bar.xaxis"))
-        menu.addItem(menuItem(
-            title: "Open Dashboard Popover…",
-            action: #selector(openDashboardPopoverMenuItem(_:)),
-            representedObject: snapshot.id,
-            symbol: "rectangle.portrait.on.rectangle.portrait"))
-
         if let url = dashboard.dashboardURL {
             menu.addItem(menuItem(
                 title: "Usage Dashboard",
@@ -547,8 +540,8 @@ final class MenuController: NSObject, NSMenuDelegate {
     }
 
     @objc private func openSettingsMenuItem() {
-        popover.close()
         detailPopover.close()
+        details.close()
         settings.show(selectedProviderID: store.selectedSnapshot?.provider ?? lastMenuProviderID)
     }
 
@@ -562,25 +555,20 @@ final class MenuController: NSObject, NSMenuDelegate {
               let snapshot = store.snapshots.first(where: { $0.id == snapshotID }),
               let button = lastStatusButton
         else { return }
-        popover.close()
         DispatchQueue.main.async { [weak self, weak button] in
             guard let self = self, let button = button else { return }
+            self.details.close()
             self.detailPopover.show(snapshot: snapshot, relativeTo: button)
         }
     }
 
-    @objc private func openDashboardPopoverMenuItem(_ sender: NSMenuItem) {
-        guard let snapshotID = sender.representedObject as? String,
-              let button = lastStatusButton
-        else { return }
+    @objc private func openAllDetailsMenuItem() {
+        guard let button = lastStatusButton ?? mergedItem?.button ?? providerItems.values.first?.button else { return }
+        detailPopover.close()
         DispatchQueue.main.async { [weak self, weak button] in
             guard let self = self, let button = button else { return }
-            self.popover.toggle(relativeTo: button, select: snapshotID)
+            self.details.show(relativeTo: button)
         }
-    }
-
-    @objc private func openAllDetailsMenuItem() {
-        details.show()
     }
 
     @objc private func openURLMenuItem(_ sender: NSMenuItem) {
@@ -651,9 +639,42 @@ final class MenuController: NSObject, NSMenuDelegate {
             failures.append("status item has no native menu")
         }
         if settings.window == nil { failures.append("settings window failed to initialize") }
+        if let anchor = mergedItem?.button ?? providerItems.values.first?.button {
+            details.show(relativeTo: anchor)
+            if !details.isShown { failures.append("all-provider popover did not open") }
+            details.close()
+        } else { failures.append("all-provider popover anchor missing") }
+
 
         let result = failures.isEmpty ? "PASS" : "FAIL: \(failures.joined(separator: "; "))"
         return "\(result) | snapshots=\(store.snapshots.count) overviewItems=\(overview.items.count)"
+    }
+
+    func showTokenHistoryForVisualQA() async {
+        // Environment-gated source builds use this to expose the real settings
+        // window to the deterministic native-window capture harness.
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        settings.prepareTokenHistoryVisualQA()
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        var report = settings.tokenHistoryVisualQAReport()
+        if let imagePath = ProcessInfo.processInfo.environment["CODEXBAR_MONTEREY_VISUAL_QA_IMAGE"],
+           !imagePath.isEmpty
+        {
+            do {
+                try settings.writeTokenHistoryVisualQASnapshot(to: URL(fileURLWithPath: imagePath))
+            } catch {
+                report = "FAIL: visual QA PNG failed: \(error.localizedDescription)"
+            }
+        }
+        if let output = ProcessInfo.processInfo.environment["CODEXBAR_MONTEREY_VISUAL_QA_RESULT"],
+           !output.isEmpty
+        {
+            do {
+                try (report + "\n").write(toFile: output, atomically: true, encoding: .utf8)
+            } catch {
+                NSLog("Could not write visual QA report: %@", error.localizedDescription)
+            }
+        }
     }
 
     private func meterImage(percent: Double, failed: Bool) -> NSImage {

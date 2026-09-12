@@ -9,11 +9,13 @@ enum DashboardParser {
             .compactMap { $0 }
             .compactMap(parseJSON)
         let flattened = roots.flatMap(flatten)
-        let costPayload = CostHistoryPayloadParser.payload(
+        let rawCostPayload = CostHistoryPayloadParser.payload(
             provider: snapshot.provider,
             fromJSON: supplementalJSON)
+        let costPayload = rawCostPayload?.claudeModelHistory
         let deepSeek = snapshot.provider == "deepseek" ? deepSeekPayload(from: roots) : nil
         let zai = snapshot.provider == "zai" ? zaiPayload(from: roots) : nil
+        let localTokenHistory = localTokenHistoryPayload(from: roots)
         let mimo = snapshot.provider == "mimo" ? mimoPayload(from: roots) : nil
         let localSpend = localSpendPayload(from: roots)
         let financeObservation = ProviderFinanceObservationExtractor.observation(
@@ -80,19 +82,20 @@ enum DashboardParser {
             }
         }
 
-        if let zai = zai {
+        if snapshot.provider == "zai", zai != nil || localTokenHistory != nil {
             metrics.append(DashboardMetric(
                 id: "today-tokens",
                 title: "Today tokens",
-                value: compact(zai.todayTokens) ?? "0"))
+                value: compact(localTokenHistory?.todayTokens ?? zai?.todayTokens ?? 0) ?? "0"))
             metrics.append(DashboardMetric(
-                id: "24h-tokens",
-                title: "24h tokens",
-                value: compact(zai.totalTokens) ?? "0"))
+                id: "30d-tokens",
+                title: "30d tokens",
+                value: compact(localTokenHistory?.last30DaysTokens ?? zai?.totalTokens ?? 0) ?? "0",
+                subtitle: localTokenHistory.flatMap(localTokenCoverageSubtitle)))
             metrics.append(DashboardMetric(
                 id: "models",
                 title: "Models",
-                value: String(zai.modelCount)))
+                value: String(max(localTokenHistory?.modelCount ?? 0, zai?.modelCount ?? 0))))
             metrics.append(DashboardMetric(
                 id: "cost",
                 title: "Cost",
@@ -100,10 +103,15 @@ enum DashboardParser {
                 subtitle: "z.ai has no monetary cost summary"))
         } else if snapshot.provider == "zai" {
             metrics.append(DashboardMetric(
-                id: "hourly-tokens",
-                title: "Hourly tokens",
+                id: "today-tokens",
+                title: "Today tokens",
                 value: "Unavailable",
                 subtitle: "No model-usage history was returned"))
+            metrics.append(DashboardMetric(
+                id: "30d-tokens",
+                title: "30d tokens",
+                value: "Unavailable",
+                subtitle: "Local history begins after token usage is observed"))
             metrics.append(DashboardMetric(
                 id: "cost",
                 title: "Cost",
@@ -120,9 +128,9 @@ enum DashboardParser {
             appendCostMetric(
                 &metrics,
                 id: "today-cost",
-                title: "Today cost",
+                title: "Today est. cost",
                 tokens: costPayload.resolvedTodayTokens,
-                cost: costPayload.resolvedTodayCostUSD)
+                estimate: costPayload.todayCostEstimate)
             appendMetric(
                 &metrics,
                 id: "30d-tokens",
@@ -131,9 +139,9 @@ enum DashboardParser {
             appendCostMetric(
                 &metrics,
                 id: "30d-cost",
-                title: "30d cost",
+                title: "30d est. cost",
                 tokens: costPayload.resolvedLast30DaysTokens,
-                cost: costPayload.resolvedLast30DaysCostUSD)
+                estimate: costPayload.last30DaysCostEstimate)
         }
 
         // Typed payloads and registered finance providers are parsed explicitly.
@@ -216,6 +224,17 @@ enum DashboardParser {
                 currencyCode: deepSeek.currencyCode,
                 spendIsEstimated: false)
             topModel = deepSeek.topModel
+        } else if snapshot.provider == "zai",
+                  let localTokenHistory = localTokenHistory,
+                  !localTokenHistory.history.isEmpty
+        {
+            history = localTokenHistory.history
+            historyContext = .dailyUsage
+            historySummary = DashboardHistorySummary(
+                spend: nil,
+                tokens: localTokenHistory.last30DaysTokens,
+                requests: nil)
+            topModel = localTokenHistory.topModel ?? zai?.topModel
         } else if let zai = zai {
             history = zai.history
             historyContext = .hourlyUsage
@@ -225,7 +244,7 @@ enum DashboardParser {
                 requests: nil)
             topModel = zai.topModel
         } else if let costPayload = costPayload {
-            history = costHistory(costPayload)
+            history = costHistory(rawCostPayload ?? costPayload)
             historyContext = .dailyUsage
             historySummary = DashboardHistorySummary(
                 spend: costPayload.resolvedLast30DaysCostUSD,
@@ -279,7 +298,9 @@ enum DashboardParser {
             errorMessage: error,
             serviceStatus: snapshot.status,
             dashboardURL: ProviderCatalog.dashboardURL(for: snapshot.provider),
-            statusURL: snapshot.status?.url ?? ProviderCatalog.statusURL(for: snapshot.provider))
+            statusURL: snapshot.status?.url ?? ProviderCatalog.statusURL(for: snapshot.provider),
+            topModel10Days: costPayload != nil ? costPayload?.topModel(dayCount: 10) : localTokenHistory?.topModel10Days,
+            topModelToday: costPayload != nil ? costPayload?.topModel(dayCount: 1) : localTokenHistory?.topModelToday)
     }
 
     private struct DeepSeekPayload {
@@ -299,6 +320,20 @@ enum DashboardParser {
         let totalTokens: Double
         let modelCount: Int
         let topModel: String?
+        let history: [DashboardHistoryPoint]
+    }
+
+    private struct LocalTokenHistoryPayload {
+        let todayTokens: Double
+        let last30DaysTokens: Double
+        let allTimeTokens: Double
+        let coverageStartedAt: Date?
+        let hasFull30DayCoverage: Bool
+        let recordCount: Int
+        let modelCount: Int
+        let topModel: String?
+        let topModel10Days: String?
+        let topModelToday: String?
         let history: [DashboardHistoryPoint]
     }
 
@@ -330,7 +365,7 @@ enum DashboardParser {
         else { return nil }
 
         let rows = (normalized["daily"] as? [[String: Any]]) ?? []
-        let history = rows.compactMap(historyPoint)
+        let history = DashboardHistoryPoint.continuousDays(rows.compactMap(historyPoint))
         return DeepSeekPayload(
             todayTokens: todayTokens,
             monthTokens: monthTokens,
@@ -363,7 +398,7 @@ enum DashboardParser {
         else { return nil }
 
         let dailyRows = normalized["daily"] as? [[String: Any]] ?? []
-        let history = dailyRows.compactMap(historyPoint)
+        let history = DashboardHistoryPoint.continuousDays(dailyRows.compactMap(historyPoint), limit: 180)
         let coverage = firstString(normalized, keys: ["coveragestartedat"])
             .flatMap(isoDate)
         let adjustments = Int(firstNumber(normalized, keys: ["adjustmentintervals"]) ?? 0)
@@ -376,6 +411,38 @@ enum DashboardParser {
             adjustmentIntervals: adjustments,
             unattributedIntervals: unattributed,
             history: Array(history.suffix(180)))
+    }
+
+    private static func localTokenHistoryPayload(from roots: [Any]) -> LocalTokenHistoryPayload? {
+        guard let payload = dictionary(named: "localTokenHistory", in: roots) else { return nil }
+        let normalized = normalizedDictionary(payload)
+        guard let todayTokens = firstNumber(normalized, keys: ["todaytokens"]),
+              let last30DaysTokens = firstNumber(normalized, keys: ["last30daystokens"]),
+              let allTimeTokens = firstNumber(normalized, keys: ["alltimetokens"])
+        else { return nil }
+
+        let daily = normalized["daily"] as? [[String: Any]] ?? []
+        let history = DashboardHistoryPoint.continuousDays(daily.compactMap(historyPoint))
+        return LocalTokenHistoryPayload(
+            todayTokens: todayTokens,
+            last30DaysTokens: last30DaysTokens,
+            allTimeTokens: allTimeTokens,
+            coverageStartedAt: firstString(normalized, keys: ["coveragestartedat"]).flatMap(isoDate),
+            hasFull30DayCoverage: normalized["hasfull30daycoverage"] as? Bool ?? false,
+            recordCount: Int(firstNumber(normalized, keys: ["recordcount"]) ?? 0),
+            modelCount: Int(firstNumber(normalized, keys: ["modelcount"]) ?? 0),
+            topModel: firstString(normalized, keys: ["topmodel"]),
+            topModel10Days: firstString(normalized, keys: ["topmodel10days"]),
+            topModelToday: firstString(normalized, keys: ["topmodeltoday"]),
+            history: history)
+    }
+
+    private static func localTokenCoverageSubtitle(_ payload: LocalTokenHistoryPayload) -> String? {
+        guard !payload.hasFull30DayCoverage, let startedAt = payload.coverageStartedAt else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d"
+        return "Local coverage since \(formatter.string(from: startedAt))"
     }
 
     private static func zaiPayload(from roots: [Any]) -> ZaiPayload? {
@@ -585,13 +652,22 @@ enum DashboardParser {
     }
 
     private static func costHistory(_ payload: CostHistoryPayload) -> [DashboardHistoryPoint] {
-        payload.sortedDaily.suffix(60).map { day in
-            DashboardHistoryPoint(
-                label: formatHistoryLabel(day.date),
-                spend: day.totalCost,
-                tokens: day.totalTokens,
-                requests: nil)
+        // Start at the first attributable Claude day, but retain later days
+        // containing only other models (zero) or ambiguous attribution (unknown).
+        let first = payload.claudeModelHistory.sortedDaily.first?.date
+        let points = payload.sortedDaily.filter { first == nil || $0.date >= first! }.map { raw -> DashboardHistoryPoint in
+            let day = payload.provider == "claude" ? raw.selectingModels(CostHistoryPayload.isClaudeModel) : raw
+            let excluded = raw.totalTokens == 0 || (raw.reconciledModels.map {
+                $0.allSatisfy { !CostHistoryPayload.isClaudeModel($0.modelName) }
+            } ?? false)
+            return DashboardHistoryPoint(
+                label: formatHistoryLabel(raw.date),
+                spend: day?.resolvedCost ?? (day == nil && excluded ? 0 : nil),
+                tokens: day?.totalTokens ?? (day == nil && excluded ? 0 : nil),
+                dayKey: raw.date)
         }
+        return DashboardHistoryPoint.continuousDays(points,
+            through: payload.updatedAt.flatMap(isoDate), missingTokens: 0, missingSpend: 0)
     }
 
     private static func genericHistorySummary(
@@ -626,7 +702,9 @@ enum DashboardParser {
             }
         }
         for root in roots { visit(root) }
-        return candidates.max(by: { score($0) < score($1) }).map { Array($0.suffix(60)) } ?? []
+        return candidates.max(by: { score($0) < score($1) }).map {
+            Array(DashboardHistoryPoint.continuousDays($0).suffix(60))
+        } ?? []
     }
 
     private static func score(_ points: [DashboardHistoryPoint]) -> Int {
@@ -644,8 +722,9 @@ enum DashboardParser {
         let spend = firstNumber(normalized, keys: ["spend", "cost", "amount", "totalcost", "usd"])
         let tokens = firstNumber(normalized, keys: ["tokens", "totaltokens", "tokenusage"])
         let requests = firstNumber(normalized, keys: ["requests", "requestcount", "totalrequests"])
-        guard spend != nil || tokens != nil || requests != nil else { return nil }
-        return DashboardHistoryPoint(label: label, spend: spend, tokens: tokens, requests: requests)
+        let dayKey = (dateValue as? String).flatMap { $0.count == 10 ? $0 : nil }
+        guard spend != nil || tokens != nil || requests != nil || dayKey != nil else { return nil }
+        return DashboardHistoryPoint(label: label, spend: spend, tokens: tokens, requests: requests, dayKey: dayKey)
     }
 
     private static func firstValue(_ row: [String: Any], keys: [String]) -> Any? {
@@ -853,18 +932,18 @@ enum DashboardParser {
         id: String,
         title: String,
         tokens: Double?,
-        cost: Double?,
+        estimate: CostEstimateSummary,
         currencyCode: String = "USD")
     {
         guard let tokens = tokens, tokens > 0 else { return }
-        if let cost = cost, cost > 0 {
-            appendMetric(&metrics, id: id, title: title, value: currency(cost, code: currencyCode))
+        let names = estimate.unpricedModels.joined(separator: ", ")
+        let detail = names.isEmpty ? "Some usage has no price" : "Unpriced: \(names)"
+        if let cost = estimate.knownCost {
+            metrics.append(DashboardMetric(id: id, title: title,
+                value: (estimate.isPartial ? "≥" : "") + (currency(cost, code: currencyCode) ?? decimal(cost)),
+                subtitle: estimate.isPartial ? "Partial estimate · \(detail)" : nil))
         } else {
-            metrics.append(DashboardMetric(
-                id: id,
-                title: title,
-                value: "—",
-                subtitle: "Pricing unavailable"))
+            metrics.append(DashboardMetric(id: id, title: title, value: "—", subtitle: detail))
         }
     }
 

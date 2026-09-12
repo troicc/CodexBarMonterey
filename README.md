@@ -12,13 +12,18 @@ Included:
 - merged or per-provider menu-bar presentation with four status-item display styles;
 - a native macOS status menu with configurable overview rows, provider/account submenus, quota pace, resets, metrics, and service state;
 - native, status-item-anchored provider detail popovers with explicit quota labels and separately labeled token/cost history charts;
+- no duplicate fixed-dark dashboard popover entry; both provider detail and all-provider overview use native status-item popovers following system appearance;
 - Manual, fixed, and adaptive refresh modes, refresh-on-open, transition-based service/quota notifications, and VoiceOver labels;
-- account-isolated local quota/spend history, transactional credential verification, and in-app token-account switching/removal;
+- account-isolated local quota/spend history, plus an unpruned Application Support token ledger that imports Codex/Claude token components and z.ai hourly/model buckets;
+- Claude history attributed by actual model, with third-party Claude Code models retained separately from Claude and excluded from combined totals to avoid overlap with provider API history;
+- persistent Codex/Claude per-model token breakdowns, reconciled before splitting mixed days; unknown prices remain missing, and local API cost estimates are explicitly distinct from subscription bills or official quota use;
+- known cost subtotals remain visible with `≥` and unpriced-model details; top-model summaries separately rank the last 10 local calendar days (including today) and today by tokens;
+- a Settings → Usage Data page with 24h/7d/30d/90d/1y/all-time charts, provider/model breakdowns, visible CSV export, and full JSON export;
 - z.ai compact views prioritize and label the five-hour allowance while retaining MCP/monthly windows in full details;
 - universal arm64/x86_64 packaging;
 - Sparkle 2.9.4 integration; a signed update channel still requires a real appcast/key configuration;
 - optional Developer ID signing and notarization;
-- daily upstream release PRs and macOS 12 deployment-target verification.
+- daily upstream release checks and macOS 12 deployment-target verification; automated PR creation also requires the repository setting that permits GitHub Actions to create pull requests.
 
 Provider-specific raw output remains available through the bundled CLI. The app does not port WidgetKit, every bespoke animation, or every provider-specific login surface, and does not claim pixel-perfect parity with the macOS 14+ upstream UI.
 

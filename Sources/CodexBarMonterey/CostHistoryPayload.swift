@@ -6,7 +6,7 @@ import Foundation
 /// for names such as `totalTokens`: that key also occurs in every daily row and
 /// dictionary iteration order is not a stable data contract. This type keeps
 /// the selected-window aggregate, daily history, and model summary separate.
-struct CostHistoryPayload: Decodable, Hashable {
+struct CostHistoryPayload: Codable, Hashable {
     let provider: String
     let source: String?
     let updatedAt: String?
@@ -24,9 +24,10 @@ struct CostHistoryPayload: Decodable, Hashable {
     }
 
     var resolvedLast30DaysCostUSD: Double? {
-        positiveOrZero(last30DaysCostUSD) ??
-            positiveOrZero(totals?.totalCost) ??
-            summedDaily(\.totalCost)
+        if let daily = daily {
+            return Self.completeSum(daily.map(\.resolvedCost))
+        }
+        return positiveOrZero(last30DaysCostUSD) ?? positiveOrZero(totals?.totalCost)
     }
 
     /// Tokens recorded for the current local calendar day. The cost scanner's
@@ -47,34 +48,71 @@ struct CostHistoryPayload: Decodable, Hashable {
         }
     }
 
-    var topModel: String? {
-        var costs: [String: Double] = [:]
-        var appearances: [String: Int] = [:]
-        for day in daily ?? [] {
-            for breakdown in day.modelBreakdowns ?? [] {
-                let name = breakdown.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty else { continue }
-                costs[name, default: 0] += max(0, breakdown.cost ?? 0)
-                appearances[name, default: 0] += 1
+    var todayCostEstimate: CostEstimateSummary { costEstimate(dayCount: 1) }
+    var last30DaysCostEstimate: CostEstimateSummary { costEstimate(dayCount: 30) }
+
+    func costEstimate(dayCount: Int, now: Date = Date(), calendar: Calendar = .current) -> CostEstimateSummary {
+        guard daily != nil else {
+            return CostEstimateSummary(knownCost: dayCount == 30 ? resolvedLast30DaysCostUSD : nil,
+                unpricedModels: [], hasUnattributedCost: true)
+        }
+        return CostEstimateSummary(days: days(inLast: dayCount, now: now, calendar: calendar))
+    }
+
+    /// Ranking is by token volume, independent of price availability.
+    var topModel: String? { topModel(dayCount: 10) }
+
+    func topModel(dayCount: Int, now: Date = Date(), calendar: Calendar = .current) -> String? {
+        var totals: [String: Double] = [:]
+        for day in days(inLast: dayCount, now: now, calendar: calendar) {
+            guard let rows = day.reconciledModels else {
+                if day.totalTokens != 0 { return nil }
+                continue
             }
-            for rawName in day.modelsUsed ?? [] {
-                let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !name.isEmpty else { continue }
-                appearances[name, default: 0] += 1
+            for row in rows {
+                let name = row.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty, let tokens = row.totalTokens, tokens.isFinite, tokens >= 0 else { return nil }
+                totals[name, default: 0] += tokens
             }
         }
-        if let highestCost = costs
-            .filter({ $0.value > 0 })
-            .sorted(by: { lhs, rhs in
-                lhs.value == rhs.value ? lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending : lhs.value > rhs.value
-            })
-            .first
-        {
-            return highestCost.key
+        return totals.filter { $0.value > 0 }.sorted {
+            $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value
+        }.first?.key
+    }
+
+    private func days(inLast count: Int, now: Date, calendar: Calendar) -> [CostHistoryDay] {
+        guard count > 0,
+              let cutoff = calendar.date(byAdding: .day, value: 1 - count, to: calendar.startOfDay(for: now))
+        else { return [] }
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return sortedDaily.filter { day in
+            guard let date = formatter.date(from: day.date) else { return false }
+            return date >= cutoff && date <= now
         }
-        return appearances.sorted(by: { lhs, rhs in
-            lhs.value == rhs.value ? lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending : lhs.value > rhs.value
-        }).first?.key
+    }
+
+    /// Local client logs identify models, not the billing endpoint or account.
+    /// Exclude third-party/ambiguous rows from the Claude model view.
+    var claudeModelHistory: CostHistoryPayload {
+        guard provider == "claude" else { return self }
+        let days = sortedDaily.compactMap { $0.selectingModels { Self.isClaudeModel($0) } }
+        return CostHistoryPayload(provider: provider, source: source, updatedAt: updatedAt,
+            sessionTokens: nil, sessionCostUSD: nil,
+            last30DaysTokens: days.reduce(0) { $0 + ($1.totalTokens ?? 0) },
+            last30DaysCostUSD: Self.completeSum(days.map(\.totalCost)), daily: days, totals: nil)
+    }
+
+    static func isClaudeModel(_ model: String) -> Bool {
+        model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("claude-")
+    }
+
+    static func completeSum(_ values: [Double?]) -> Double? {
+        guard values.allSatisfy({ $0 != nil && $0!.isFinite && $0! >= 0 }) else { return nil }
+        return values.compactMap { $0 }.reduce(0, +)
     }
 
     private func summedDaily(_ keyPath: KeyPath<CostHistoryDay, Double?>) -> Double? {
@@ -94,7 +132,8 @@ struct CostHistoryPayload: Decodable, Hashable {
         guard let row = sortedDaily.last(where: { String($0.date.prefix(10)) == todayKey }) else {
             return 0
         }
-        return positiveOrZero(row[keyPath: keyPath]) ?? 0
+        if keyPath == \CostHistoryDay.totalCost { return row.resolvedCost }
+        return positiveOrZero(row[keyPath: keyPath])
     }
 
     private func positiveOrZero(_ value: Double?) -> Double? {
@@ -103,7 +142,7 @@ struct CostHistoryPayload: Decodable, Hashable {
     }
 }
 
-struct CostHistoryDay: Decodable, Hashable {
+struct CostHistoryDay: Codable, Hashable {
     let date: String
     let inputTokens: Double?
     let outputTokens: Double?
@@ -113,14 +152,51 @@ struct CostHistoryDay: Decodable, Hashable {
     let totalCost: Double?
     let modelsUsed: [String]?
     let modelBreakdowns: [CostModelBreakdown]?
+
+    var resolvedCost: Double? {
+        if let rows = reconciledModels, modelBreakdowns?.isEmpty == false {
+            return CostHistoryPayload.completeSum(rows.map(\.cost))
+        }
+        return totalCost
+    }
+
+    /// Only use a breakdown when it reconciles with the daily total. A model
+    /// name list alone cannot partition a mixed day.
+    var reconciledModels: [CostModelBreakdown]? {
+        if let rows = modelBreakdowns, !rows.isEmpty,
+           let sum = CostHistoryPayload.completeSum(rows.map(\.totalTokens)),
+           let total = totalTokens, abs(sum - total) < 0.5 {
+            return rows
+        }
+        if let names = modelsUsed, names.count == 1, let total = totalTokens {
+            return [CostModelBreakdown(modelName: names[0], cost: totalCost, totalTokens: total)]
+        }
+        return nil
+    }
+
+    func selectingModels(_ include: (String) -> Bool) -> CostHistoryDay? {
+        guard let rows = reconciledModels else {
+            let names = modelsUsed ?? []
+            return !names.isEmpty && names.allSatisfy(include) ? self : nil
+        }
+        let selected = rows.filter { include($0.modelName) }
+        guard !selected.isEmpty else { return nil }
+        if selected.count == rows.count { return self }
+        return CostHistoryDay(date: date, inputTokens: nil, outputTokens: nil,
+            cacheReadTokens: nil, cacheCreationTokens: nil,
+            totalTokens: selected.compactMap(\.totalTokens).reduce(0, +),
+            totalCost: CostHistoryPayload.completeSum(selected.map(\.cost)),
+            modelsUsed: selected.map(\.modelName), modelBreakdowns: selected)
+    }
 }
 
-struct CostModelBreakdown: Decodable, Hashable {
+struct CostModelBreakdown: Codable, Hashable {
     let modelName: String
     let cost: Double?
+    var totalTokens: Double? = nil
 }
 
-struct CostHistoryTotals: Decodable, Hashable {
+struct CostHistoryTotals: Codable, Hashable {
     let inputTokens: Double?
     let outputTokens: Double?
     let cacheReadTokens: Double?
@@ -191,5 +267,49 @@ enum CostHistoryPayloadParser {
     private static func canonicalDescription(_ dictionary: [String: Any]) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]) else { return "" }
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// A lower-bound estimate preserves known prices without treating unpriced
+/// models as free. Complete cost accessors remain nil for incomplete periods.
+struct CostEstimateSummary: Hashable {
+    let knownCost: Double?
+    let unpricedModels: [String]
+    let hasUnattributedCost: Bool
+
+    var isPartial: Bool { !unpricedModels.isEmpty || hasUnattributedCost }
+
+    init(knownCost: Double?, unpricedModels: [String], hasUnattributedCost: Bool) {
+        self.knownCost = knownCost
+        self.unpricedModels = unpricedModels
+        self.hasUnattributedCost = hasUnattributedCost
+    }
+
+    init(days: [CostHistoryDay]) {
+        var sum: Double = 0
+        var known = days.isEmpty
+        var missing = Set<String>()
+        var unattributed = false
+        for day in days {
+            if let cost = day.resolvedCost, cost.isFinite, cost >= 0 {
+                sum += cost
+                known = true
+            } else if let rows = day.reconciledModels {
+                for row in rows {
+                    if let cost = row.cost, cost.isFinite, cost >= 0 {
+                        sum += cost
+                        known = true
+                    } else if row.totalTokens != 0 {
+                        missing.insert(row.modelName)
+                    }
+                }
+            } else {
+                unattributed = true
+                missing.formUnion(day.modelsUsed ?? [])
+            }
+        }
+        knownCost = known ? sum : nil
+        unpricedModels = missing.sorted()
+        hasUnattributedCost = unattributed
     }
 }

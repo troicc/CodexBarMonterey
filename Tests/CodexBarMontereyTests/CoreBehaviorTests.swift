@@ -3,6 +3,36 @@ import XCTest
 @testable import CodexBarMonterey
 
 final class CoreBehaviorTests: XCTestCase {
+    func testCostChartsKeepInactiveDaysAndUnknownPrices() {
+        for provider in ["claude", "codex"] {
+            let snapshot = ProviderSnapshot(provider: provider, version: nil, source: "test", status: nil,
+                usage: nil, credits: nil, account: nil, plan: nil, error: nil, rawJSON: "{}")
+            let json = """
+            {"provider":"\(provider)","daily":[
+              {"date":"2026-09-08","totalTokens":100,"totalCost":5,"modelsUsed":["claude-test"]},
+              {"date":"2026-09-11","totalTokens":20,"modelsUsed":["claude-test"]}
+            ]}
+            """
+            let history = DashboardParser.dashboard(snapshot: snapshot, supplementalJSON: json).history
+            XCTAssertEqual(history.map(\.dayKey), ["2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"])
+            XCTAssertEqual(history.map(\.tokens), [100, 0, 0, 20])
+            XCTAssertEqual(history.map(\.spend), [5, 0, 0, nil])
+        }
+    }
+
+    func testDailyAPIGapsStayUnknownAcrossYearBoundary() {
+        let points = [
+            DashboardHistoryPoint(label: "Jan 2", tokens: 20, dayKey: "2026-01-02"),
+            DashboardHistoryPoint(label: "Dec 31", tokens: 100, dayKey: "2025-12-31"),
+        ]
+        let history = DashboardHistoryPoint.continuousDays(points)
+        XCTAssertEqual(history.map(\.dayKey), ["2025-12-31", "2026-01-01", "2026-01-02"])
+        XCTAssertEqual(history.map(\.tokens), [100, nil, 20])
+        XCTAssertEqual(Set(history.map(\.id)).count, 3)
+        let hourly = [DashboardHistoryPoint(label: "08:00", tokens: 5), DashboardHistoryPoint(label: "10:00", tokens: 8)]
+        XCTAssertEqual(DashboardHistoryPoint.continuousDays(hourly), hourly)
+    }
+
     func testSnapshotIdentityIncludesUsageAccount() {
         let first = snapshot(email: "first@example.com", organization: "Example")
         let second = snapshot(email: "second@example.com", organization: "Example")
@@ -135,6 +165,56 @@ final class CoreBehaviorTests: XCTestCase {
             primary: RateWindow(usedPercent: 9, windowMinutes: nil, resetsAt: nil),
             secondary: RateWindow(usedPercent: 80, windowMinutes: nil, resetsAt: nil))
         XCTAssertEqual(legacy.headlineUsedPercent, 9)
+    }
+
+    func testZaiTokenHistoryBuildsThirtyDayMetricWithoutQuotaSamples() throws {
+        let directory = temporaryDirectory(named: "tokens")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-08-29T08:30:00Z"))
+        let rawJSON = """
+        {
+          "zaiUsage": {
+            "modelUsage": {
+              "xTime": ["2026-08-29T06:00:00Z", "2026-08-29T07:00:00Z"],
+              "modelDataList": [
+                {"modelName": "glm-4.5", "tokensUsage": [120, 180]},
+                {"modelName": "glm-4", "tokensUsage": [40, 60]}
+              ]
+            }
+          }
+        }
+        """
+        let zai = ProviderSnapshot(
+            provider: "zai",
+            version: nil,
+            source: "api",
+            status: nil,
+            usage: nil,
+            credits: nil,
+            account: "zhipu@example.com",
+            plan: nil,
+            error: nil,
+            rawJSON: rawJSON)
+        let ledger = LocalTokenHistoryStore(storageDirectory: directory)
+        let supplement = try XCTUnwrap(ledger.record(
+            snapshot: zai,
+            supplementalJSON: nil,
+            now: now))
+        let revision = ledger.revision
+        _ = ledger.record(snapshot: zai, supplementalJSON: nil, now: now)
+        XCTAssertEqual(ledger.revision, revision)
+
+        let report = ledger.report(
+            accountID: try XCTUnwrap(ledger.accounts().first?.id),
+            range: .thirtyDays,
+            now: now)
+        XCTAssertEqual(report.last30DaysTokens, 400)
+        XCTAssertEqual(report.modelTotals.first?.name, "glm-4.5")
+
+        let dashboard = DashboardParser.dashboard(snapshot: zai, supplementalJSON: supplement)
+        XCTAssertEqual(dashboard.metrics.first(where: { $0.id == "30d-tokens" })?.value, "400")
+        XCTAssertEqual(dashboard.historyContext, .dailyUsage)
+        XCTAssertFalse(dashboard.history.isEmpty)
     }
 
     func testTokenAccountActivationAndRemovalPreservesOtherAccounts() throws {

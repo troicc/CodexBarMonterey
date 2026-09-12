@@ -2,18 +2,33 @@
 
 > ⚠️ **记忆漂移提醒：本文件只是 2026-08-01 的人工快照，不是事实源。** 分支、HEAD、工作树、上游能力、依赖版本、CI 和发布状态都可能在下一次对话前改变。每次开始分析、修改、发布或接手任务时，必须先读取本文件，再用 `git status --short --branch`、`git log -5 --oneline --decorate`、`git branch -vv` 和当前代码/测试重新验证。发生冲突时，以工作树、代码、测试、CI 和 Git 历史为准，并在同一轮改动中同步修正本文件；不得仅凭模型记忆或本文件里的旧结论继续操作。
 
+## 2026-09-12 历史图缺失日期修复（接续未提交工作树）
+
+- 用户截图的根因：Dashboard 将稀疏 daily 行直接映射为等间距图点，没有补齐日历；零值柱又被最小 2pt 高度画成有用量。真实 CLI 2026-09-12 扫描中，9 月 9 日没有 Claude 行，9 月 10/11 日仍有 Claude 模型用量；不能按用户印象删改这些记录。
+- `DashboardHistoryPoint.dayKey` 保留完整日期作为 ID；`continuousDays` 对严格 yyyy-MM-dd 数据排序、按日历天补位并按天数限制窗口，跨年不会出现短标签 ID 冲突。无日期的小时/额度样本不走日补齐；重复/不规范日期保留原始输入。
+- Claude/Codex cost 图补零到扫描 `updatedAt` 对应本地日，不向 stale scan 之后虚构数据。Claude 从首个可归属日开始，后续仅第三方模型日显示零、不可拆分混用日保留未知，已存在的未定价费用继续断线。
+- DeepSeek typed daily、Moonshot/MiMo 本地余额差、generic dated history 同样保留缺失日期，但补 nil，因为 API/采样缺失不能证明零消费。z.ai 与 Usage Data 的小时/日/月聚合保持连续时间桶到当前桶，空桶 `hasRecords=false`；占位只用于图表，不写入账本、不加入导出或改变汇总。z.ai supplemental 的空日不带 tokens 字段。
+- Provider 与旧 mini 柱图的零值高度为 0；Provider 图和 Usage Data 图增加日期/数值悬停说明，未知采样显示 No data / No recorded data。
+- 新增回归覆盖连续两天无用量、扫描日尾部零值、缺失价格、第三方/歧义归属、DeepSeek/Moonshot/MiMo/generic、z.ai 空日与账本记录数、跨年及小时样本不误补天。SwiftPM 中增加同类行为测试；本机仍为 Swift 5.6.1，使用既有轻量回归与本地双架构优化构建，不能记作 SwiftPM 6.2 全套 CI 已通过。
+- `bash Scripts/test_cost_history_parser.sh` 全套通过（含新增 z.ai 空日/账本断言）；UI/release/offline smoke/Monterey patcher/provider auth/catalog contracts、shell syntax、`git diff --check` 通过。`bash Scripts/test_visual_model_attribution.sh /private/tmp/codexbar-calendar-gap-evidence` 通过 provider 日历断言和 production view geometry；Claude/Codex 390×340 连续空日图四张浅深截图均已人工检查，并抽查单 Provider、All Providers 和 Usage Data 回归图。
+- Swift 5.6 编译设置页新增 tooltip 时出现类型推断长耗时，已将柱视图提取为 `TokenHistoryBar`，最终源码渲染和双架构优化构建均通过。构建产物 `/private/tmp/codexbar-calendar-gap-build/CodexBar Monterey Local Validation.app` 的 Universal 2、macOS 12、ad-hoc deep codesign、65-provider offline smoke 均通过；helper/Sparkle 复用已安装模板，仍不是正式 Release 产物。
+- 最终真实 runtime smoke 已通过：`/private/tmp/codexbar-calendar-gap-runtime.txt` 为 `PASS | snapshots=4 overviewItems=11`，测试 App 自动退出。启动验证前已精确退出 `/Applications/CodexBar Monterey.app` 的旧进程。
+- 首次安装请求被自动审批以需要明确安装授权拒绝；用户随后明确回复「确认安装」，已用 `replace_macos_app.py --source '/private/tmp/codexbar-calendar-gap-build/CodexBar Monterey Local Validation.app' --destination '/Applications/CodexBar Monterey.app' --keep-backup` 成功安装。完整包 fingerprint 为 `35dda7b80a8e59e3744bd1a6e2e8f49070a7231f3a1da8f97a3dd28065fcca85`；源/目标 Info.plist 和主程序逐字节一致，deep codesign、Universal 2 验证通过，版本 0.10.0、build 202609121008。
+- 旧版保留在 `/Applications/.codex-backup-CodexBar Monterey-8956c0c7893e4fc88e014ab44532bee5.app`。安装器两次确认无旧进程；没有自动重启安装版，用户可正常打开应用使用修复。
+- 用户在安装完成后明确要求「推送到github吧」，已授权将当前安装版对应的 token 历史、模型归属、原生用量页面和日期修复及测试提交、推送到 `origin/main`。这是源码推送；本次未要求新版本 tag 或 GitHub Release，ENGINE_VERSION 保持不变。推送前已确认远端地址为 `troicc/CodexBarMonterey`，本地已安装包与已验证构建主程序一致。
+
 ## 1. 当前状态速览
 
 | 项目 | 当前值 |
 | --- | --- |
 | GitHub 仓库 | troicc/CodexBarMonterey |
 | origin | https://github.com/troicc/CodexBarMonterey.git |
-| 分支快照 | 2026-08-01 本轮从 `main@1e5f1b9` 开始原生状态菜单重构；实际分支必须运行 Git 命令确认 |
-| 重构基线 | 1e5f1b9 — docs: record v0.7.0 install exception；本轮 UI/功能重构位于其后的工作树 |
-| 工作树期望 | 本轮记录时包含尚未提交的原生菜单重构；接手时必须用 Git 重新确认归属，不能盲目覆盖 |
+| 分支快照 | 2026-09-12 在 `main@529493a`（`v0.10.0`）基础上整理已安装验证的 token 历史与日期修复，用户已授权提交并推送 main；实际提交须运行 Git 命令确认 |
+| 重构基线 | 529493a — Release native menu overhaul for 0.10.0 |
+| 工作树期望 | token 历史/导出、z.ai 30d、模型归属/部分费用、原生全部 Provider 弹窗及日期修复作为当前安装版一并提交；接手时必须用 Git 重新确认归属，不能盲目覆盖 |
 | 上游引擎常量 | ENGINE_VERSION = v0.46.0 |
-| 当前正式 tag | 本轮开始时为 v0.7.0；用户已明确要求把当前超大重构发布为 v0.10.0，最终状态须以 Git/GitHub 复核 |
-| 下一版本规则 | 当前发布目标为 v0.10.0；应用版本来自 tag，仍不得修改 ENGINE_VERSION |
+| 当前正式 tag | `v0.10.0`，位于 `529493a`；2026-09-12 用户仅要求源码 commit/push，没有要求新 tag/release |
+| 下一版本规则 | 尚未指定；应用版本继续来自 tag，仍不得修改 ENGINE_VERSION |
 | 最低系统 | macOS 12 Monterey |
 | 架构 | Universal 2：arm64 + x86_64 |
 | UI 技术 | AppKit 菜单栏壳 + SwiftUI 内容视图 |
@@ -476,3 +491,92 @@ SwiftPM 6.2 tests、Universal 2、Sparkle framework、Intel slice 和最终 bund
 - `Scripts/build_local_validation.sh` 已从精确工作树生成 `/private/tmp/codexbar-local-validation.hTvb8O/CodexBar Monterey.app`：显示版本 0.10.0、`x86_64 arm64`、ad-hoc codesign、macOS 12/offline smoke 和真实菜单/详情 popover runtime smoke 均通过，后者返回 `PASS | snapshots=3 overviewItems=11`。
 - 上述本地包已安装为 `/Applications/CodexBar Monterey.app` 并成功启动（验证时 PID 98661）；被替换的 0.1.0 App 可从 `/private/tmp/codexbar-install-backup.Irp3tx/CodexBar Monterey.app` 恢复。安装包仍继承模板 helper/Sparkle，不能误记为 GitHub Release 资产。
 - 用户明确要求发布 `v0.10.0`，本次不下载 GitHub Release 资产。最终 commit、Actions run 和 Release 状态须在完成后补记。
+
+## 12. 2026-08-29 Token 历史、Usage Data 与菜单去重
+
+本节记录从 `main@529493a`（`v0.10.0`）开始的本地工作树改造。用户要求 z.ai 像 Codex 一样显示 30d token，长期保留所有可证明为 token 的数据，在设置中按多个时间范围可视化并导出，同时删除信息重复、固定深色的旧 Dashboard Popover 菜单入口。本轮没有获得 commit、push、tag 或 release 授权。
+
+### 12.1 长期 token 账本与可信度边界
+
+- 新增 `LocalTokenHistoryStore`，默认写入 `~/Library/Application Support/CodexBarMonterey/token-history-v1.json`；目录/文件权限分别为 0700/0600，按 provider + snapshot account hash 隔离。
+- 账本按账号、时间桶、来源和模型稳定去重；重叠的滚动响应会更新同一个 bucket，不会重复累计。它不做自动裁剪，因此已保存的小时、天和月历史不会因为 provider API 的滚动窗口消失。
+- z.ai 从 live `zaiUsage.modelUsage.xTime + modelDataList[].tokensUsage` 导入逐小时/逐模型 token。官方当前只返回滚动小时数据，首次使用时 30d 指标会明确显示本地覆盖起点；只有积累满 30 天后才是完整 30d 覆盖。
+- Codex/Claude 从 typed cost history 导入 daily input/output/cache-read/cache-creation/total token、cost 和 model name 列表；DeepSeek 从 typed daily usage 导入 token/request/cost。其他 provider 只有在 raw payload 含明确命名且带真实日期与 token 字段的 history/daily/hourly 数组时才进入通用回退。
+- `LocalQuotaTrendStore` 的 z.ai 5h quota 百分比继续保存在独立文件；不能进入 token 账本，也不能参与 30d token 汇总。
+- 无法解码的账本不会被空文件覆盖；设置页会显示持久化错误，优先保留可能可恢复的原文件。
+- 为避免数据收集依赖用户当前选中项，每次成功刷新都会主动运行 Codex/Claude 的 dated cost-history enrichment。多账号 provider 因上游 cost 命令没有 account selector，仍继续抑制无法可靠归属的 provider 级数据。
+
+### 12.2 UI、可视化和导出
+
+- z.ai 菜单/dashboard 指标由 Today + 24h 改为 Today + 30d；30d 来自本地去重账本，并在覆盖不足 30 天时显示 `Local coverage since …`。历史图优先使用本地 30d 日聚合，当前模型排名仍来自真实 model usage。
+- Settings 侧栏新增 `Usage Data`，支持 All providers 或单账号筛选，以及 24h/7d/30d/90d/1y/All 时间范围。
+- Usage Data 展示选定范围总 token、Today、30d、All time、时间序列柱图；来源具备细分时还显示 input/output/cache read/cache creation、模型和 Provider 排名。
+- `Export visible CSV…` 导出当前账号/范围的逐 bucket 明细；`Export full JSON…` 导出完整 schema v1 账本，便于用户自行用 pandas、R、Excel 或其他工具可视化。设置页还可直接定位本地原始数据文件。
+- 删除 `DashboardPopoverController.swift`、`MenuController` 中的 `Open Dashboard Popover…` 项和动作。跟随系统外观、锚定状态项的单 Provider 详情 popover 以及独立 All Providers 窗口继续保留。
+
+### 12.3 GitHub Actions 重复失败邮件根因
+
+- `.github/workflows/upstream-sync.yml` 每天定时运行。2026-08-28 的 run `33184441504` 成功检查出上游已从本仓库的 `v0.46.0` 更新到 `v0.55.1`，也成功准备/发现 `automated/upstream-codexbar` 分支；失败只发生在 `peter-evans/create-pull-request@v8` 创建 PR 的最后一步。
+- GitHub 返回的精确错误是 `GitHub Actions is not permitted to create or approve pull requests`。因为 `main` 仍是 `v0.46.0`，定时任务每天都会重新发现同一差异并再次失败；订阅了 Actions 失败通知的仓库 owner 因此每天收到邮件。
+- 正确修复是到 GitHub 仓库 Settings → Actions → General → Workflow permissions，开启 `Allow GitHub Actions to create and approve pull requests`，再 rerun；或者如果不再需要上游跟踪，就禁用该 workflow。仅退订邮件会隐藏症状，不会让自动升级 PR 恢复工作。本轮只诊断，没有授权修改远端仓库设置或关闭 workflow。
+
+### 12.4 新增验证
+
+- `Scripts/token_history_store_regression.swift` 覆盖 z.ai 重叠小时/模型去重、修正 bucket、Today/30d/模型汇总、Codex token components、跨年不裁剪、磁盘重载、CSV/JSON 导出和 0600 权限；已接入 `Scripts/test_cost_history_parser.sh`。
+- `CoreBehaviorTests` 新增 z.ai token 账本与 DashboardParser 30d 指标行为测试。
+- `Scripts/test_ui_contract.py` 现在约束旧 Dashboard Popover 不得恢复、Usage Data/导出必须存在、token ledger 不得使用 suffix 裁剪，并继续保证 z.ai quota 百分比不冒充 token。
+- 全套静态回归已通过：Monterey patcher、smoke/UI/release contracts、typed cost/z.ai quota/local spend/local token history、provider auth、66-provider auth catalog、全部 shell syntax，以及 Swift 5.6/macOS 12 全源码 typecheck。只有项目既存的 AppKit protocol actor warning 与 `@preconcurrency` remark。
+- 精确末版由 `Scripts/build_local_validation.sh` 生成 `/private/tmp/codexbar-local-validation.UpyAtt/CodexBar Monterey Local Validation.app`。主程序、helper 与全部 Sparkle Mach-O 均为 `x86_64 arm64`，主程序/helper 最低系统为 macOS 12，deep codesign、offline 65-provider smoke 均通过；真实 AppKit runtime smoke 返回 `PASS | snapshots=3 overviewItems=11`。该包的 helper/Sparkle 仍复制自原安装，只是本机验证/安装包，不是正式 release provenance。
+- 使用真实 `SettingsRootView` 与确定性 token fixture 完成了 source-level 浅色/深色视觉检查；两种外观均为 `PASS | viewport=980x680 scrollViews=1`，并人工检查标题、范围选择、摘要、图表、token components、模型/Provider 卡片没有黑底泄漏或可见裁切。证据位于 `/Users/EasyMaker/.codex/visualizations/2026/08/29/01a04c80-fd26-77d2-af63-d660f2c5aeb5/token-history/usage-data-light.png` 和 `usage-data-dark.png`。系统窗口截图因未授予 Screen Recording 权限未重试。
+- 末版本地包已通过 `Scripts/install_local.sh` 安装为 `/Applications/CodexBar Monterey.app`；上一版备份在 `/private/tmp/codexbar-install-backup.BZlfmb/CodexBar Monterey.app`。安装后确认版本 0.10.0、bundle ID `com.example.codexbar.monterey`、macOS 12、主程序/helper Universal 2、deep codesign 有效，且源/目标主程序与 Info.plist SHA-256 分别一致。按交付规则未自动重启，结束时没有残留 CodexBarMonterey 进程。
+- 本轮仍未获得 commit、push、tag 或 release 授权，因此所有改动保留在工作树中，没有修改远端 workflow 或 GitHub 仓库设置。
+
+
+## 13. 2026-09-08 Claude 模型归属与原生全部 Provider 弹窗
+
+本轮承接第 12 节未提交工作树，仍在 `main@529493a`，未获 commit/push/tag/release 授权。不要清理或覆盖既有变更；`ENGINE_VERSION` 未修改。
+
+### 13.1 已确认根因与统计边界
+
+- 真实 bundled CLI 的 `cost --provider claude` 扫描 Claude Code 客户端历史，包含 `glm-5.2`、`glm-5.3` 等第三方模型。9 月 3 日、9 月 5 日存在混用，不能按接入日期裁剪。
+- 本轮初始诊断样本共 788,060,513 tokens，其中 Claude 模型 281,282,912、GLM 506,777,601。Claude 模型最早日为本地 2026-09-03；这些只是该次采样值，不是长期固定断言。
+- CLI 已提供 `daily[].modelBreakdowns[].totalTokens`，旧 `CostModelBreakdown` 却只解码 modelName/cost；旧账本只保存 modelsUsed，因此设置中的模型用量列表为空。
+- GLM 原始费用缺失（nil），旧详情图把 nil 映射到零，造成「历史有 token 但费用 0」误导。本地 dollar cost 属于 API 价格估算，不能称作官方账单或订阅额度消耗。
+
+### 13.2 实现与迁移
+
+- `CostHistoryPayload` 解码/编码模型 token 数，只有分模型之和等于日总量时才允许拆分混用日期；单模型旧数据可明确归属，不按名称列表平分混用日。
+- Dashboard 的 Claude cost/history 使用 `claudeModelHistory`，排除非 Claude 模型与无法划分的混用日。费用缺失与部分未定价保持 nil；真正返回的零价格仍可显示。详情费用图断开未知点，今日/30d 金额标为 estimated cost。
+- `LocalTokenHistoryStore` 保留每日模型明细，Models 列表显示全部模型并支持精确值 tooltip/导出。GLM 等作为 `claude-code-other` / `Claude Code · Other models` 独立来源；无法拆分的旧混用记录作为 `claude-code-unattributed`。不自动归入 z.ai 账号，因为日志模型名无法证明 endpoint/账单账号。
+- 第三方/未归属来源可独立筛选，并保留在完整 JSON/CSV 导出；默认跨 provider 汇总及可见范围导出排除它们，避免与 API 来源发生重叠。部分缺失的 token components 不显示为完整汇总。
+- 成功刷新时按账号+来源+日期替换旧日桶，避免旧汇总与新拆分重复累计；第一次替换前复制 `token-history-before-model-attribution.json`，备份失败则不执行该次替换。长期历史仍不做时间裁剪。
+- `DetailsWindowController` 改为 `.transient` NSPopover，菜单动作待菜单关闭后锚定状态栏 button。`AllProvidersContentView` 使用系统背景/文字、统一卡片与额度条，History 可展开，底部 Refresh/Settings 固定；按屏幕可用高度收缩。账号条目使用 snapshot ID，避免相同 provider 的多账号视图重复 ID。
+
+### 13.3 验证与交付记录
+
+- typed cost、quota、spend、token ledger 与新增 `model_attribution_regression.swift` 已通过；覆盖混用归属、缺失价格、迁移备份、幂等刷新、磁盘重载、模型总和及完整导出。真实账本副本也与 CLI 模型明细逐项核对一致。
+- Monterey patcher、offline smoke、UI、release contracts、provider auth 回归已通过。源码由 Swift 5.6 本地 fallback 以 `-O` 编译 arm64/x86_64，不能记为 SwiftPM 6.2 全量测试通过。
+- `Scripts/visual_model_attribution.swift` 渲染真实 production views；`bash Scripts/test_visual_model_attribution.sh <output>` 可重现。覆盖 All Providers 620×560 / 620×680、Claude/Codex Usage Data 760×680 的浅色与深色，共 8 张，检查 scroll geometry、模型总量且人工检查文字/卡片/滚动边界。有效证据在 `/private/tmp/codexbar-model-fix-evidence-opaque/`。初次直接渲染设置子视图缺少父容器背景导致透明 PNG，已修正测试宿主背景与 drawing appearance；不要把初次透明图当作 app 的实际外观。
+- 构建包：`/private/tmp/codexbar-model-fix-build/CodexBar Monterey Local Validation.app`，版本保持 0.10.0，主程序新构建，helper/Sparkle 复制自已安装模板；Universal 2、macOS 12、deep codesign、65-provider 离线 smoke 通过。这是本地 ad-hoc 验证包，不是 GitHub Release 产物。
+- 真实 AppKit runtime smoke 已通过：`PASS | snapshots=4 overviewItems=11`，包含两种 NSPopover 打开/关闭断言。真实 Application Support 账本已按模型修正，Claude 281,282,912 / Other 506,777,601 与诊断明细一致，Claude 两个模型之和等于总量；原账本备份存在且权限 0600。
+- 已通过 `replace_macos_app.py --keep-backup` 安装到 `/Applications/CodexBar Monterey.app`；旧 app 备份为 `/Applications/.codex-backup-CodexBar Monterey-fd14c38e076b4c0cb044e376d54f6782.app`。源/安装目标 Info.plist 和主程序 SHA-256 一致，安装 helper 校验完整 bundle fingerprint 为 `23950afdd77b620205961a62bcde40f1218769cf4395e42004faa1ad92e52e7e`。bundle ID `com.example.codexbar.monterey`，版本 0.10.0，build 202609081850，最低 macOS 12。
+- 测试应用已自动退出，安装时两次确认没有旧进程；未自动重启已安装 app。所有修改仍留在 main 工作树，未 commit/push/tag/release。
+
+- 2026-09-08 用户随后要求「继续」：复核安装主程序 hash 仍与修复包一致，持久化 Codex/Claude/Other 模型明细与日总量均对齐；已打开 `/Applications/CodexBar Monterey.app`，NSRunningApplication 确认运行路径正确（当次 PID 47998）。此次延续仅做本地启动核对，仍没有 commit/push/tag/release 授权。
+
+
+## 14. 2026-09-08 已知部分费用与 10d / Today Top model
+
+- 用户发现 Codex 今日估算费用为空，并要求 Top model 分为 10d 和 Today。本轮继续保留既有 main 工作树；没有 commit/push/tag/release 授权。
+- 已实际打开官方模型页 `https://developers.openai.com/api/docs/models/gpt-6-astra`，2026-09-08 页面公布标准档每百万 token 输入 $10、缓存输入 $1、输出 $50（长上下文、Fast/Batch/Flex 另有倍率）。未在本项目硬编码价格或修改引擎定价。
+- 本机 CLI 当次 Codex 今日返回 `gpt-6-astra` 94,873,949 tokens / $162.680776，以及 `codex-auto-review` 19,966,360 tokens / 未知价格。缺失的是 auto-review 价格，GPT-6 本身已有估算。第 13 节的完整费用 nil 处理隐藏了已知金额，本轮修正呈现方式。
+- 新增 `CostEstimateSummary`：完整 `resolvedCost` 与历史曲线继续保留 nil 缺口；今日/30d 卡片单独显示已知价格之和，部分估算前加 `≥`，subtitle/tooltip 列明未定价模型。全未知不显示 0，明确零费用仍可显示；没有根据总 token 数猜测输入/输出价格。
+- `CostHistoryPayload.topModel(dayCount:now:calendar:)` 按模型 token 排名；10d 从本地今天零点向前 9 天开始，Today 从本地当天零点开始，排除未来日；同量以模型名排序，无分模型 token 的混用日不猜 winner。`LocalTokenHistoryStore` 为 z.ai 等有日期的模型数据输出同样两个时间窗。
+- `ProviderDashboard` 新增 `topModel10Days` / `topModelToday`；单 Provider 详情、全部 Provider 卡片及旧 summary 组件统一显示 `Top model · 10d` 与 `Top model · Today`。单 Provider 把两项放在 Summary 后，便于直接查看。此次诊断样本中 Codex 10d 为 gpt-5.6-sol，Today 为 gpt-6-astra。
+- `model_attribution_regression.swift` 增加已知部分/全部未知/完整费用、10d 首尾边界、未来日、本地午夜、同 token 稳定排序、价格不影响排名和 z.ai 账本窗口测试，全部通过。UI/release/offline smoke/provider auth/Monterey patcher contracts 通过。
+- Swift 5.6 在给单 Provider metric 的大嵌套 builder 加 tooltip 后出现类型推断耗时；已将其提取为 `ProviderDetailMetricCell`，同时提取 All Provider 的 header/metric 子视图。最终全源码 typecheck 通过，只有原有 AppKit actor warnings / preconcurrency remarks。不要恢复成过大的嵌套表达式。
+- 最终本地 Universal 2 构建：`/private/tmp/codexbar-top-model-build-final/CodexBar Monterey Local Validation.app`；`Scripts/build_local_validation.sh` 的 macOS 12 / ad-hoc codesign / 65-provider offline smoke 均通过，helper/Sparkle 继续复用安装模板，不是正式 release provenance。
+- `bash Scripts/test_visual_model_attribution.sh /private/tmp/codexbar-top-model-evidence-final` 已通过：生产单 Provider 390×560、All Providers 620×560 / 620×680，均验证浅色/深色，6 张针对性弹窗截图已打开人工检查；同时生成既有 settings 回归图。新 fixture 明确含未定价 auto-review，断言今日卡片 `≥$12.50`、10d=Sol / Today=Astra，且模型明细总量对齐。单 Provider metric 拆分后金额说明与两个排名均可见。
+- 真实 CLI JSON 单独通过最终 parser：已知 subtotal $162.680776、未定价 codex-auto-review、10d=Sol、Today=Astra，与独立 Python 按日期/模型汇总一致。
+- 最终真实 runtime smoke 返回 `PASS | snapshots=4 overviewItems=11`。已通过 `replace_macos_app.py --keep-backup` 安装到 `/Applications/CodexBar Monterey.app`；源/目标 Info.plist 与主程序 SHA-256 一致，deep codesign 与双架构检查再次通过。版本 0.10.0，build 202609081909，主程序 SHA-256 `0904f52c06b1fbb3269faeec9c5b600eae8dd0235e2ebe9807f46b2b2661bd06`。
+- 上一版 app 备份：`/Applications/.codex-backup-CodexBar Monterey-b368e46fca7c4fa9a0957ea65d8f85ba.app`；安装时确认没有旧进程，测试结束自动退出，未自动重启安装版。代码仍留在 main 工作树，没有 commit/push/tag/release。
