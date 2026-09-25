@@ -7,6 +7,7 @@ struct ModelAttributionVisualQA {
     static func main() throws {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+        UserDefaults.standard.register(defaults: ["subscriptionDefaultUSD.codex": "100", "subscriptionDefaultUSD.claude": "125"])
         let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         let gapDashboards = historyGapRegression()
@@ -53,6 +54,13 @@ struct ModelAttributionVisualQA {
             AllProviderEntry(id: $0.0.id, dashboard: DashboardParser.dashboard(snapshot: $0.0, supplementalJSON: $0.1))
         }
         let codexDashboard = entries[0].dashboard
+        let suite = "usage-value-visual.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("100", forKey: "subscriptionDefaultUSD.codex")
+        defaults.set("125", forKey: "subscriptionDefaultUSD.claude")
+        defaults.set(try JSONEncoder().encode(ExchangeRateQuote(date: today, base: "USD", quote: "CNY", rate: 6.7065)),
+            forKey: CurrencyDisplay.quoteKey)
         precondition(codexDashboard.metrics.first { $0.id == "today-cost" }?.value == "≥$12.50")
         precondition(codexDashboard.metrics.first { $0.id == "today-cost" }?.subtitle?.contains("codex-auto-review") == true)
         precondition(codexDashboard.topModel10Days == "gpt-5.6-sol")
@@ -60,6 +68,84 @@ struct ModelAttributionVisualQA {
         for mode in ["light", "dark"] {
             let appearance = NSAppearance(named: mode == "light" ? .aqua : .darkAqua)!
             app.appearance = appearance
+            let quotaNow = Date()
+            var quotaDashboard = subscriptionDashboards.first { $0.id == "claude" }!
+            let quotaReset = quotaNow.addingTimeInterval(-4 * 3600)
+            let samples = (0..<18).map { index -> ClaudeQuotaSample in
+                let timestamp = quotaNow.addingTimeInterval(Double(index - 18) * 1800)
+                return ClaudeQuotaSample(timestamp: timestamp,
+                    usedPercent: index < 10 ? Double(25 + index * 7) : Double((index - 10) * 8),
+                    resetsAt: index < 10 ? quotaReset : quotaNow.addingTimeInterval(3600))
+            }
+            quotaDashboard.claudeQuotaHistory = [
+                ClaudeQuotaSeries(id: "five-hour", title: "5 hours", samples: samples),
+                ClaudeQuotaSeries(id: "weekly", title: "Weekly", samples: samples.enumerated().map { index, sample in
+                    ClaudeQuotaSample(timestamp: sample.timestamp, usedPercent: Double(20 + index), resetsAt: nil)
+                })]
+            precondition(quotaDashboard.hasClaudeSharedQuota)
+            precondition(quotaDashboard.quotaSectionTitle == "Subscription quota · all devices")
+            precondition(!ClaudeQuotaSeries.connects(samples[9], samples[10]))
+            precondition(ClaudeQuotaSeries.connects(samples[10], samples[11]))
+            try render(ProviderDetailPopoverView(dashboard: quotaDashboard, isRefreshing: false,
+                refresh: {}, openDashboard: {}, openStatus: {}, openSettings: {}),
+                size: NSSize(width: 390, height: 560), appearance: appearance,
+                output: output.appendingPathComponent("claude-shared-detail-\(mode).png"))
+            try render(AllProvidersContentView(entries: [AllProviderEntry(id: "claude", dashboard: quotaDashboard)],
+                isRefreshing: false, error: nil, refresh: {}, openSettings: {}),
+                size: NSSize(width: 620, height: 560), appearance: appearance,
+                output: output.appendingPathComponent("claude-shared-all-\(mode).png"))
+            for state in ["samples", "empty", "error"] {
+                var historyDashboard = quotaDashboard
+                if state == "empty" { historyDashboard.claudeQuotaHistory = [] }
+                if state == "error" { historyDashboard.claudeQuotaHistoryNotice = "Quota history could not be saved. Current quotas are still available." }
+                try render(ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ClaudeQuotaCoverageView(dashboard: historyDashboard)
+                        ClaudeQuotaHistoryView(dashboard: historyDashboard, expanded: true, now: quotaNow)
+                    }.padding(14)
+                }, size: NSSize(width: 362, height: 320), appearance: appearance,
+                    output: output.appendingPathComponent("claude-quota-\(state)-\(mode).png"))
+            }
+            try render(ScrollView {
+                ProviderUsageValueCard(dashboard: entries[1].dashboard,
+                    preferenceKey: entries[1].dashboard.subscriptionPreferenceKey!, defaults: defaults,
+                    modelsExpanded: true).padding(12)
+            }, size: NSSize(width: 362, height: 460), appearance: appearance,
+                output: output.appendingPathComponent("claude-local-value-\(mode).png"))
+            for state in ["automatic", "manual", "missing", "editor"] {
+                var timingDashboard = codexDashboard
+                let key = "subscription-visual-" + state
+                if state == "automatic" {
+                    timingDashboard.subscriptionExpiresAt = Date().addingTimeInterval(5 * 86400)
+                }
+                if state == "manual" { defaults.set("renews|2026-09-01", forKey: key) }
+                try render(ScrollView {
+                    SubscriptionTimingCard(dashboard: timingDashboard, preferenceKey: key,
+                        defaults: defaults, editing: state == "editor").padding(12)
+                }, size: NSSize(width: 362, height: 240), appearance: appearance,
+                    output: output.appendingPathComponent("subscription-date-\(state)-\(mode).png"))
+            }
+            for code in [DisplayCurrency.usd, .cny] {
+                defaults.set(code.rawValue, forKey: CurrencyDisplay.selectionKey)
+                let currency = CurrencySettingsStore(defaults: defaults)
+                for width: CGFloat in [362, 560] {
+                    var valueDashboard = codexDashboard
+                    valueDashboard.modelUsage.append(ModelUsageSummary(
+                        id: "a-very-long-model-name-with-a-dated-version-2026-09-14",
+                        tokens: 37_000_000, cost: CostEstimateSummary(knownCost: 14959.15, unpricedModels: [], hasUnattributedCost: false)))
+                    valueDashboard.usageCostEstimate = CostEstimateSummary(knownCost: 14978.15,
+                        unpricedModels: ["codex-auto-review"], hasUnattributedCost: false)
+                    try render(ScrollView {
+                        ProviderUsageValueCard(dashboard: valueDashboard,
+                            preferenceKey: valueDashboard.subscriptionPreferenceKey!, defaults: defaults,
+                            modelsExpanded: true, currency: currency).padding(10)
+                    }, size: NSSize(width: width, height: 460), appearance: appearance,
+                        output: output.appendingPathComponent("usage-value-\(code.rawValue)-\(Int(width))-\(mode).png"))
+                }
+                try render(ScrollView { CurrencySettingsView(currency: currency).padding(18) },
+                    size: NSSize(width: 650, height: 420), appearance: appearance,
+                    output: output.appendingPathComponent("currency-settings-\(code.rawValue)-\(mode).png"))
+            }
             for dashboard in subscriptionDashboards {
                 try render(ProviderDetailPopoverView(dashboard: dashboard, isRefreshing: false,
                     refresh: {}, openDashboard: {}, openStatus: {}, openSettings: {}),
@@ -237,6 +323,9 @@ struct ModelAttributionVisualQA {
         let scrolls = children(host).compactMap { $0 as? NSScrollView }
         precondition(scrolls.count == 1, "expected exactly one primary scroll view")
         let scroll = scrolls[0]
+        if let document = scroll.documentView {
+            precondition(document.bounds.width <= scroll.contentSize.width + 1, "content must not scroll horizontally")
+        }
         let frame = host.convert(scroll.bounds, from: scroll)
         precondition(frame.width > size.width - 65 && frame.height > size.height - 180)
         precondition(frame.minX >= -1 && frame.maxX <= size.width + 1)

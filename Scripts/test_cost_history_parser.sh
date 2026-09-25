@@ -52,3 +52,24 @@ swiftc \
   "$TMP/main.swift" \
   -o "$TMP/model-attribution-regression"
 "$TMP/model-attribution-regression"
+
+swiftc -module-cache-path "$MODULE_CACHE" \
+  "$ROOT/Sources/CodexBarMonterey/CostHistoryPayload.swift" \
+  "$ROOT/Sources/CodexBarMonterey/CurrencyDisplay.swift" \
+  "$ROOT/Scripts/usage_value_regression.swift" \
+  -o "$TMP/usage-value-regression"
+"$TMP/usage-value-regression"
+
+swiftc -module-cache-path "$MODULE_CACHE" \
+  "$ROOT/Sources/CodexBarMonterey/Models.swift" \
+  "$ROOT/Sources/CodexBarMonterey/SubscriptionTiming.swift" \
+  "$ROOT/Scripts/subscription_timing_regression.swift" \
+  -o "$TMP/subscription-timing-regression"
+"$TMP/subscription-timing-regression"
+
+swiftc -module-cache-path "$MODULE_CACHE" \
+  "$ROOT/Sources/CodexBarMonterey/Models.swift" \
+  "$ROOT/Sources/CodexBarMonterey/ClaudeQuotaHistory.swift" \
+  "$ROOT/Scripts/claude_quota_history_regression.swift" \
+  -o "$TMP/claude-quota-history-regression"
+"$TMP/claude-quota-history-regression"

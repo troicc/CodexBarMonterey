@@ -2,6 +2,58 @@
 
 > ⚠️ **记忆漂移提醒：本文件只是 2026-08-01 的人工快照，不是事实源。** 分支、HEAD、工作树、上游能力、依赖版本、CI 和发布状态都可能在下一次对话前改变。每次开始分析、修改、发布或接手任务时，必须先读取本文件，再用 `git status --short --branch`、`git log -5 --oneline --decorate`、`git branch -vv` 和当前代码/测试重新验证。发生冲突时，以工作树、代码、测试、CI 和 Git 历史为准，并在同一轮改动中同步修正本文件；不得仅凭模型记忆或本文件里的旧结论继续操作。
 
+## 2026-09-25 最新源码与安装包上传授权
+
+- 用户随后明确选择「两者都上传」，授权把旧备份和最新源码/安装包都上传当前 GitHub 仓库。最新源码范围包括已在本机验证并安装的费用/汇率、订阅日期、Claude 全端共享额度和本地趋势，以及对应测试；原备份清理范围仍未确认，不能据此删除。
+- 本轮复核安装包与 `/private/tmp/codexbar-web-quota-build/CodexBar Monterey Local Validation.app` 的主程序、Info.plist 一致，主程序 SHA-256 `52e58bfa6c70e66ff9bc5fc46e70a9352dc18cb9ef81846ec3d9da1856f5b497`。前文的轻量回归、双架构构建、视觉 QA 和真实运行结果仍适用于当前 Swift 源码；源码推送后由 main CI 补跑完整 SwiftPM 和构建检查。
+- 最新安装包将作为与源码提交关联的本地验证版草稿附件上传；不是正式版本发布，不创建 vX.Y.Z tag、不改 ENGINE_VERSION 或 appcast、不替换已有正式 Release。打包只包含应用，凭据、Config/build.env、个人设置、用量账本不上传。后续推送/CI/附件校验结果按实际远端状态核实。
+
+## 2026-09-25 旧应用备份归档到 GitHub
+
+- 用户因旧备份占空间询问上传 GitHub。本轮盘点 `/Applications/.codex-backup-CodexBar Monterey-*.app` 共 8 个不同主程序，约 609 MiB，build 为 202608291638、202609081850、202609081909、202609121008、202609121022、202609121035、202609142135、202609241042。另有 `/private/tmp/codexbar-expiry-build` 和 `/private/tmp/codexbar-web-quota-build` 两份约 155 MiB 的构建包；未删除。
+- 已归档 8 个历史本地验证包到当前 public 仓库 `troicc/CodexBarMonterey` 的 **Release 草稿** `local-backups-2026-09-25`，标题 `Local build backup archive · 2026-09-25`。草稿链接 https://github.com/troicc/CodexBarMonterey/releases/tag/untagged-a869bda690c88cd1181c 。不是正式 app release，不标记 Latest，不改 appcast/ENGINE_VERSION；本轮没有提交或推送最新源码。归档说明明确 grouping tag 不证明每个历史本地包的源码 provenance，当前安装的 202609251739 不在旧备份归档中。
+- 每个 ZIP 内统一为 `CodexBar Monterey.app`，打包前原包 deep codesign 通过且无已知凭据文件名。压缩后 8 包共 173.2 MiB，每包已实际解压，逐文件 SHA-256、symlink 和 mode 对照原包，恢复包签名通过。另上传 BACKUPS.json、SHA256SUMS 共 10 个附件；GitHub 返回的每个附件 digest/size/state 已全部与本机核对。
+- 校验凭证 `/private/tmp/codexbar-backup-archive-20260925/{BACKUPS.json,SHA256SUMS,verification.json}`；只删除本轮新生成且已远端校验的 8 个临时 ZIP，避免再占 173.2 MiB。原 8 个备份均保留，尚未获具体本地删除范围确认。清理计划 `/private/tmp/codexbar-backup-cleanup-plan.json` 建议保留最近回退版 build 202609241042（db120e858abe4fb6abfe85c13efab5e9），删除其余 7 份可释放约 532 MiB；当前安装应用不在清理范围。
+- GitHub 初次只读权限探测受 sandbox proxy 限制，首次提升权限自动审批超时，允许的一次重试成功；直接 API 和 Git transport 均有效，不是 token 失效。
+
+## 2026-09-25 Claude 网页消耗与共享额度呈现
+
+- 用户确认采用「共享额度标识＋额度趋势＋本机统计覆盖说明」。继续保留 main@47c14aa 上费用、汇率、订阅日期的未提交改动；没有 commit/push/tag/Release 请求，ENGINE_VERSION 不变。
+- Claude 详情和 All Providers 把共享订阅额度放在前面，标注 `Subscription quota · all devices`，说明同账号网页、桌面和 Claude Code 共用。原生菜单同步标注额度覆盖全端、token/费用仅本机日志；费用卡片改为 `Local usage value · 30d`，历史标题及 Usage Data 说明网页聊天 token/费用未收录。复用既有额度采集，没有新增抓取聊天正文、独立网页 token 推算或百分比到金额换算。
+- 新增 `ClaudeQuotaHistoryStore`，独立保存 `~/Library/Application Support/CodexBarMonterey/claude-quota-history-v1.json`，目录 0700、文件 0600、账号+组织 hash 隔离。账号未知不采样，允许已有且受验证条件约束的 Claude CLI display email 作为新额度账本身份，不迁移原 token/cost 账本键。仅记录成功响应的 upstream `usage.updatedAt`；重复/倒序/未来/无时间戳/失败响应不生成观测，亚秒时间归一至秒以支持跨重启去重。
+- 仅采集总 5h/weekly 两个窗口，按 windowMinutes 识别，旧字段无 duration 时按 primary/secondary 回退；明确 weekly primary 不冒充 5h，Admin API 来源不采样。独立 typed series 从 DashboardStore 附加，不进入 generic history、token 账本或费用统计；币种重绘保留已有样本而不采样。
+- 趋势默认折叠，查看近 24h，可切换 5h/weekly；时间轴按真实时间、纵轴固定 0–100%，点悬停显示时间和比例。reset timestamp 改变/跨 reset、百分比下降、超过 1h 间隔均断线，单样本仍显示点。最多保留 30 天、每账号每窗口 10000 点；首次使用不回填历史。损坏存储不覆盖，保存失败显示说明。
+- 新增 `Scripts/claude_quota_history_regression.swift` 并接入 `test_cost_history_parser.sh`。全套轻量回归、认证、UI/release/offline smoke、Monterey patcher、66-provider catalog、diff whitespace 检查通过；亚秒去重补充后独立重跑新回归通过。本机 Swift 5.6.1，不声称 SwiftPM 6.2 全套通过。
+- `bash Scripts/test_visual_model_attribution.sh /private/tmp/codexbar-web-quota-visual` 通过；12 张新增 production 浅/深截图已逐张查看，包含 Claude 单 Provider 390×560、All Providers 620×560、趋势有数据/空/存储错误 362×320、本地费用卡 362×460，无裁切/重叠/横向滚动。既有费用、设置和日期视觉回归亦通过。
+- `Scripts/build_local_validation.sh` 生成 `/private/tmp/codexbar-web-quota-build/CodexBar Monterey Local Validation.app`（0.10.0 / build 202609251739），Universal 2、macOS 12、deep codesign、65-provider offline smoke 均通过；helper/Sparkle 复用安装模板，属于本地 ad-hoc 验证包，不是正式 Release。提升权限的真实 GUI runtime smoke `/private/tmp/codexbar-web-quota-runtime.txt` 返回 `PASS | snapshots=4 overviewItems=11`。真实 Claude 首次记录 1 个账号、2 个窗口共 2 个样本，落盘权限 0600；没有执行网页发消息前后对照，不声称验证了每条网页聊天的即时增量。
+- 已用 `replace_macos_app.py --keep-backup` 安装到 `/Applications/CodexBar Monterey.app`，完整包 fingerprint `f04caa13bba14ca69c93e13164ddb669510b46e259b5aa072489578dbb1b1cff`。备份 `/Applications/.codex-backup-CodexBar Monterey-db120e858abe4fb6abfe85c13efab5e9.app`；源/目标主程序及 Info.plist SHA-256 相同，安装后 deep codesign / 双架构复核通过。安装器关闭精确 bundle 旧实例并确认无残留，未自动重启。代码留在 main 未提交工作树，未 commit/push/tag。
+
+## 2026-09-24 订阅到期与续费日期
+
+- **后续核实纠正**：用户反馈所有订阅日期为空后，实际联网读取上游 `main` 的 `docs/codex.md`，发现其 OpenAI web dashboard 章节已经明确支持订阅续费/到期日期：先 subscription API，再在同账号 ChatGPT 网页会话中捕获 billing 请求的日期和续费标记，需 OpenAI web extras/网页登录态。参考 https://github.com/steipete/CodexBar/blob/main/docs/codex.md 。这与本地 `Vendor/CodexBar` 的 v0.46.0 旧快照不同，不能把“旧引擎 Codex 没返回”说成“最新上游 CodexBar 不支持”。上一轮只增加了已有字段的显示与手动回退，**尚未移植新的 Codex 网页订阅采集链路，也没有真实自动日期成功证据**。最新 Claude 文档/已检查的 Web fetcher 未发现同类日期采集；z.ai 最新文档未声明该能力，不能据此断言服务商接口不提供。此核实未修改引擎、应用或用户登录设置。
+
+- 从 `main@47c14aa` 的既有费用/汇率未提交工作树继续，保留此前变更。用户明确选择“优先自动读取，读不到时允许手动设置”；未要求 commit/push/tag/Release，ENGINE_VERSION 不变。
+- `UsageSnapshot` 接入上游明确的 `subscriptionExpiresAt` / `subscriptionRenewsAt`，两个可选日期各自容错，异常日期不丢弃原额度数据；只解析这两个语义明确字段，不从 quota reset、token expiry 或费用周期猜订阅时间。当前本地上游 Codex/Claude 采集路径未设置这两个字段，因此这些来源通常需要手动填写。
+- `SubscriptionTiming` 与共享 SwiftUI 卡片用于单 Provider 详情、All Providers 和原生菜单。接口日期优先于手动值，到期字段优先于续费字段；显示来源 Provider/Manual、本地日期（接口包含时间）和剩余日历天数/日期已过提示，不自动滚动续费日期。
+- 详情和 All Providers 支持 Set date/Edit、到期/续费选择、日期选择、Save/Cancel/Clear；按 snapshot 身份加显示账号的 hash 隔离 UserDefaults，包含 Claude CLI 补充邮箱，但不改变历史账本 ID。手动值保存为类型+本地 yyyy-MM-dd，未保存时不默认生成日期，无数据明确显示 Not provided。
+- 新增 `subscription_timing_regression.swift` 并接入 `test_cost_history_parser.sh`，覆盖 ISO/小数秒日期、无效元数据不破坏额度、自动优先、无数据/非法日期、日历日倒计时、续费不推算、不同账号键与持久化/清除。全套轻量回归、UI/release/offline smoke contracts、Monterey patcher、provider auth 与 66-provider auth catalog 已通过。真实 helper 的 provider catalog 为 65，按正确 stdin 合同校验通过（首次单独无输入调用失败，已修正调用）。
+- `test_visual_model_attribution.sh /private/tmp/codexbar-expiry-visual` 通过；新增自动/手动/缺失/编辑四状态的 362×240 浅深色 8 张截图，均人工查看，编辑器和单 Provider 390×560、All Providers 620×560 无重叠或横向溢出，既有费用/历史/设置视觉回归通过。SwiftPM 6.2 完整测试仍需 CI，不能将本机 Swift 5.6 回归记为全套 SwiftPM 通过。
+- `Scripts/build_local_validation.sh` 生成 `/private/tmp/codexbar-expiry-build/CodexBar Monterey Local Validation.app`（0.10.0 / build 202609241042），Universal 2、macOS 12、deep codesign 和 65-provider offline smoke 通过。沙箱内 GUI 启动直接中止后，在提升权限的图形会话运行成功；`/private/tmp/codexbar-expiry-runtime.txt` 为 `PASS | snapshots=4 overviewItems=11`。helper/Sparkle 复用安装模板，仍为本地 ad-hoc 验证包，不是正式 Release。
+- 已用 `replace_macos_app.py --keep-backup` 安装至 `/Applications/CodexBar Monterey.app`，完整包 fingerprint `9d7190b5217e2289df6a09f8ea4e205c567303fdeaeb165b86f64a81da4a4767`。备份 `/Applications/.codex-backup-CodexBar Monterey-b636557deef447259d2a8dccb6e7a40b.app`；源/目标主程序与 Info.plist SHA-256 相同，安装器关闭精确 bundle 进程并确认无残留，未自动重启。代码留在 main 工作树，未 commit/push/tag。
+
+## 2026-09-14 用量价值、模型费用与 USD/CNY 显示
+
+- 本轮从干净 `main@47c14aa` 开始。用户要求在现有界面加入用量折算费用 / 订阅费、各模型 tokens / 费用，并追加设置内 USD / 人民币切换及自动汇率更新；确认本机 Codex $100/月、Claude $125/月。没有要求 commit、push、tag 或 Release；ENGINE_VERSION 不变。
+- 单 Provider 详情和 All Providers 卡片在额度之后、历史之前新增 `Usage value · 30d`。倍数是近 30 个本地日历日的已知 API 折算费用 / 月订阅费，不是实付账单或配额消耗率。Models disclosure 展示所有可归属模型的总 tokens（包括源报告的缓存 tokens）和费用；未知价格显示 Unavailable，同模型跨日部分定价和整体部分费用均保留 `≥`。无法拆分的日期保留 Unattributed usage，不按模型名称平均分配；Claude 继续过滤第三方模型。没有 dated Claude 数据时新卡片不把不可归属聚合当作零费用。
+- 订阅费用不从额度或套餐名称猜测。现有 usage/identity contract 没有可靠月实付金额，Claude `providerCost` 是 Extra usage 而非月订阅费。设置 General → Currency & subscriptions 存储 `subscriptionDefaultUSD.codex/claude`；卡片可用 `monthlySubscriptionUSD.<provider>.<snapshot ID hash>` 按账号覆盖或恢复默认。个人 $100/$125 通过本机偏好设置保存，不硬编码为所有用户的产品价格。零月费不做除法，非法/负数金额不参与比较。
+- `CurrencyDisplay.swift` 统一格式化原始 USD/CNY 金额；其他币种保留原币。摘要、余额、历史图、订阅及模型费用随选择即时切换；DashboardStore 缓存完整 presentation supplemental JSON，币种/汇率变化只重新解析显示，不重复采集或写入历史。原始账本、导出、定价引擎和模型归属不改变。
+- `CurrencySettingsStore` 启动和每小时经 HTTPS 获取 `https://api.frankfurter.dev/v2/rate/USD/CNY`，设置里可手动刷新；15 秒超时、请求合并、1 小时缓存、响应币种/日期/有限正数校验，拒绝倒退的汇率日期。UserDefaults 持久化 quote 和 last checked；失败保留旧汇率和明确错误，首次无汇率时保持原币种，绝不把美元数值直接加人民币符号。Frankfurter 是每日参考汇率而非秒级外汇行情，设置和人民币卡片明确显示来源/汇率日期；2026-09-14 连通性探测返回 6.7065。
+- 新增 `usage_value_regression.swift`，接入 `test_cost_history_parser.sh`，覆盖 30d 边界、未知/部分价格、模型归属、订阅比值、USD/CNY 双向换算、缓存重载、HTTP 失败和非法汇率保留旧值；`CODEXBAR_TEST_LIVE_FX=1` 额外验证生产 URLSession 请求。SwiftPM CoreBehaviorTests 增加对应关键行为，完整 SwiftPM 6.2 仍需 CI，本机 Swift 5.6 使用轻量回归。
+- 视觉测试扩展生产费用卡片 362/560×460 的 USD/CNY 浅深色矩阵、设置币种区 650×420 浅深色，以及现有 Provider/All Providers/Usage Data 回归；断言单一主滚动视图、视口边界和禁止横向溢出。最终 `bash Scripts/test_visual_model_attribution.sh /private/tmp/codexbar-usage-value-final-qa` 通过，8 张费用卡片、4 张币种设置、单 Provider 与 All Providers 浅深色截图已打开检查；大金额和长模型名不重叠或横向裁切。
+- `CODEXBAR_TEST_LIVE_FX=1 bash Scripts/test_cost_history_parser.sh`、UI/release/offline smoke contracts、provider auth、66-provider catalog、Monterey patcher、shell syntax 和 `git diff --check` 通过；生产 URLSession 实测成功返回 `USD/CNY 6.7065, published 2026-09-14`，不是仅 curl 探测。SwiftPM 新测试尚未通过 CI 执行，不能记为 SwiftPM 6.2 全套通过。
+- `Scripts/build_local_validation.sh` 最终生成 `/private/tmp/codexbar-usage-value-final-build/CodexBar Monterey Local Validation.app`（0.10.0 / build 202609142135），Universal 2、macOS 12、deep codesign、65-provider offline smoke 均通过；真实运行 `/private/tmp/codexbar-usage-value-runtime.txt` 为 `PASS | snapshots=4 overviewItems=11`。helper/Sparkle 复用安装模板，属于本地 ad-hoc 验证包，不是正式 Release。
+- 已通过 `replace_macos_app.py --keep-backup` 安装至 `/Applications/CodexBar Monterey.app`，完整包 fingerprint `d72684bfedb8b86fb30dde3edf0c43db1d14659f0582395036558cbbc5496ed9`。旧版备份 `/Applications/.codex-backup-CodexBar Monterey-2c3e39abcbbf4e129d02332b2a9b2c00.app`；安装时确认无旧进程，安装版未自动重启。已把用户指定的 100/125 写入本机 `com.example.codexbar.monterey` 的两个订阅默认值，并逐项回读验证；显示币种默认 USD，可在设置切换人民币。工作树留在 main，未提交/推送/打 tag。
+
 ## 2026-09-12 专属额度与账号/订阅套餐
 
 - 真实 helper 已返回 Claude `extraRateWindows[].{id,title,window}` 的 `Fable only`，Codex 同结构返回 Spark / reserve 等专属额度。旧 generic parser 只递归子 window，把它们重命名为 Weekly / 5 hours 并按标题与总额度去重。现在保留 wrapper ID、标题、独立百分比、重置日期和周期；专属额度按 ID 去重，不与同周期总额度合并，也不从全局比例推算。

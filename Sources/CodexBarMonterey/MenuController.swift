@@ -68,6 +68,8 @@ final class MenuController: NSObject, NSMenuDelegate {
             selector: #selector(preferencesChanged),
             name: .preferencesChanged,
             object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(currencyDisplayChanged),
+            name: .currencyDisplayChanged, object: nil)
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(providerConfigurationChanged(_:)),
@@ -91,6 +93,10 @@ final class MenuController: NSObject, NSMenuDelegate {
         rebuildStatusItems()
         renderStatusItems()
         scheduleNextRefresh()
+    }
+
+    @objc private func currencyDisplayChanged() {
+        store.rebuildCurrencyPresentation()
     }
 
     @objc private func providerConfigurationChanged(_: Notification) {

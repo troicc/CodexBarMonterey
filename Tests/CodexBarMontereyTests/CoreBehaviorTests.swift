@@ -3,6 +3,42 @@ import XCTest
 @testable import CodexBarMonterey
 
 final class CoreBehaviorTests: XCTestCase {
+    func testModelValuePreservesPartialCostsAndUnknownModels() throws {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let json = """
+        {"provider":"codex","daily":[{"date":"\(formatter.string(from: Date()))","totalTokens":150,
+          "modelBreakdowns":[{"modelName":"gpt-a","totalTokens":100,"cost":250},
+          {"modelName":"codex-auto-review","totalTokens":50}]}]}
+        """
+        let payload = try XCTUnwrap(CostHistoryPayloadParser.payload(provider: "codex", fromJSON: json))
+        XCTAssertEqual(payload.modelUsage().map(\.tokens), [100, 50])
+        XCTAssertEqual(payload.modelUsage().first?.cost.knownCost, 250)
+        XCTAssertNil(payload.modelUsage().last?.cost.knownCost)
+        XCTAssertTrue(payload.last30DaysCostEstimate.isPartial)
+        XCTAssertEqual(SubscriptionComparison.multiple(estimate: payload.last30DaysCostEstimate, monthlyUSD: 100), 2.5)
+        XCTAssertNil(SubscriptionComparison.multiple(estimate: payload.last30DaysCostEstimate, monthlyUSD: 0))
+        let first = try XCTUnwrap(CLIClient.decodeSnapshots("{\"provider\":\"codex\",\"account\":\"one\"}").first)
+        let second = try XCTUnwrap(CLIClient.decodeSnapshots("{\"provider\":\"codex\",\"account\":\"two\"}").first)
+        XCTAssertNotEqual(DashboardParser.dashboard(snapshot: first).subscriptionPreferenceKey,
+            DashboardParser.dashboard(snapshot: second).subscriptionPreferenceKey)
+        let claude = try XCTUnwrap(CLIClient.decodeSnapshots("{\"provider\":\"claude\"}").first)
+        XCTAssertNil(DashboardParser.dashboard(snapshot: claude,
+            supplementalJSON: "{\"provider\":\"claude\",\"last30DaysCostUSD\":100}").usageCostEstimate)
+    }
+
+    func testCurrencyConversionKeepsOriginalWhenRateUnavailable() {
+        let quote = ExchangeRateQuote(date: "2026-09-14", base: "USD", quote: "CNY", rate: 7)
+        let cny = CurrencyDisplay(selected: .cny, quote: quote)
+        XCTAssertEqual(cny.format(125), "CN¥875.00")
+        XCTAssertEqual(cny.converted(875, from: "CNY").value, 875)
+        XCTAssertEqual(CurrencyDisplay(selected: .usd, quote: quote).converted(875, from: "CNY").value, 125)
+        XCTAssertEqual(CurrencyDisplay(selected: .cny, quote: nil).format(125), "$125.00")
+        XCTAssertEqual(cny.converted(12, from: "EUR").code, "EUR")
+        XCTAssertNil(SubscriptionComparison.monthlyUSD("-10"))
+        XCTAssertNil(SubscriptionComparison.monthlyUSD("NaN"))
+    }
+
     func testScopedQuotaWindowsPreserveIdentityAndReset() throws {
         for provider in ["claude", "codex"] {
             let json = """

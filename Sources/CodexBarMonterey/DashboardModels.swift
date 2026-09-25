@@ -187,6 +187,19 @@ struct ProviderDashboard: Identifiable, Hashable {
     var topModel10Days: String? = nil
     var topModelToday: String? = nil
     var planLabel: String? = nil
+    var subscriptionPreferenceKey: String? = nil
+    var subscriptionDatePreferenceKey: String? = nil
+    var subscriptionExpiresAt: Date? = nil
+    var subscriptionRenewsAt: Date? = nil
+    var usageCostEstimate: CostEstimateSummary? = nil
+    var modelUsage: [ModelUsageSummary] = []
+    var hasClaudeSharedQuota = false
+    var claudeQuotaHistory: [ClaudeQuotaSeries] = []
+    var claudeQuotaHistoryNotice: String? = nil
+
+    var quotaSectionTitle: String { hasClaudeSharedQuota ? "Subscription quota · all devices" : "Quotas" }
+    var summarySectionTitle: String { id == "claude" ? "Local usage" : "Summary" }
+    var historySectionTitle: String { id == "claude" ? "Local usage history" : "History" }
 
     var showsTopModels: Bool {
         topModel10Days != nil || topModelToday != nil || ["claude", "codex", "zai"].contains(id)

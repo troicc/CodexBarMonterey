@@ -51,6 +51,32 @@ struct CostHistoryPayload: Codable, Hashable {
     var todayCostEstimate: CostEstimateSummary { costEstimate(dayCount: 1) }
     var last30DaysCostEstimate: CostEstimateSummary { costEstimate(dayCount: 30) }
 
+    func modelUsage(dayCount: Int = 30, now: Date = Date(), calendar: Calendar = .current) -> [ModelUsageSummary] {
+        var groups: [String: [CostModelBreakdown]] = [:]
+        for day in days(inLast: dayCount, now: now, calendar: calendar) {
+            if let rows = day.reconciledModels {
+                for row in rows {
+                    let name = row.modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    groups[name.isEmpty ? "" : name, default: []].append(row)
+                }
+            } else if day.totalTokens != 0 || (day.resolvedCost ?? 0) > 0 {
+                // Keep unsplittable usage visible without assigning it to a guessed model.
+                groups["", default: []].append(CostModelBreakdown(
+                    modelName: "", cost: day.resolvedCost, totalTokens: day.totalTokens))
+            }
+        }
+        return groups.map { name, rows in
+            let validCosts = rows.compactMap(\.cost).filter { $0.isFinite && $0 >= 0 }
+            return ModelUsageSummary(id: name,
+                tokens: Self.completeSum(rows.map(\.totalTokens)),
+                cost: CostEstimateSummary(knownCost: validCosts.isEmpty ? nil : validCosts.reduce(0, +),
+                    unpricedModels: [], hasUnattributedCost: validCosts.count != rows.count))
+        }.sorted {
+            if $0.id.isEmpty != $1.id.isEmpty { return !$0.id.isEmpty }
+            return $0.tokens == $1.tokens ? $0.id < $1.id : ($0.tokens ?? -1) > ($1.tokens ?? -1)
+        }
+    }
+
     func costEstimate(dayCount: Int, now: Date = Date(), calendar: Calendar = .current) -> CostEstimateSummary {
         guard daily != nil else {
             return CostEstimateSummary(knownCost: dayCount == 30 ? resolvedLast30DaysCostUSD : nil,
@@ -194,6 +220,32 @@ struct CostModelBreakdown: Codable, Hashable {
     let modelName: String
     let cost: Double?
     var totalTokens: Double? = nil
+}
+
+struct ModelUsageSummary: Hashable, Identifiable {
+    let id: String
+    let tokens: Double?
+    let cost: CostEstimateSummary
+
+    var name: String { id.isEmpty ? "Unattributed usage" : id }
+}
+
+enum SubscriptionComparison {
+    /// User-entered monthly USD, including a monthly average for annual plans.
+    static func monthlyUSD(_ text: String, locale: Locale = .current) -> Double? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: locale.decimalSeparator ?? ".", with: ".")
+        guard value.range(of: "^[0-9]+(?:\\.[0-9]{1,2})?$", options: .regularExpression) != nil,
+              let number = Double(value), number.isFinite, number >= 0, number <= 1_000_000_000 else { return nil }
+        return number
+    }
+
+    static func multiple(estimate: CostEstimateSummary?, monthlyUSD: Double?) -> Double? {
+        guard let fee = monthlyUSD, fee.isFinite, fee > 0,
+              let cost = estimate?.knownCost, cost.isFinite, cost >= 0 else { return nil }
+        let result = cost / fee
+        return result.isFinite ? result : nil
+    }
 }
 
 struct CostHistoryTotals: Codable, Hashable {

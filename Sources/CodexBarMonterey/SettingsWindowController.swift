@@ -695,6 +695,7 @@ private struct GeneralSettingsView: View {
                     }
                     .padding(12)
                 }
+                CurrencySettingsView()
                 GroupBox(label: Text("Application").font(.headline)) {
                     VStack(alignment: .leading, spacing: 12) {
                         Toggle("Launch at login", isOn: Binding(get: { store.launchAtLogin }, set: { store.setLaunchAtLogin($0) }))
@@ -1192,7 +1193,7 @@ struct TokenHistorySettingsView: View {
                     .frame(maxWidth: 360)
                 }
 
-                Text("Claude and Codex show local model usage, not official quota consumption or invoices. Other Claude Code models are kept separately and excluded from the combined total to avoid overlap with provider API data. Mixed days without model token counts remain unattributed. Token components appear only when complete.")
+                Text("Claude and Codex show local model usage, not official quota consumption or invoices. Claude web chat tokens and costs are not included; web activity is reflected in the shared subscription quota. Other Claude Code models are kept separately and excluded from the combined total to avoid overlap with provider API data. Mixed days without model token counts remain unattributed. Token components appear only when complete.")
                     .font(.system(size: 11)).foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 

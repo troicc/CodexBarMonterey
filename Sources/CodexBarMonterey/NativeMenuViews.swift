@@ -201,6 +201,19 @@ struct NativeMenuProviderCardView: View {
                     .font(.system(size: 10)).foregroundColor(.secondary).lineLimit(1)
             }
 
+            SubscriptionTimingView(dashboard: dashboard, compact: true)
+
+            if snapshot.provider == "claude" {
+                Text(dashboard.hasClaudeSharedQuota
+                    ? "Quota · all devices including web chat"
+                    : "Shared quota unavailable")
+                    .font(.system(size: 9, weight: .medium)).foregroundColor(.secondary)
+                if showMetrics {
+                    Text("Tokens & cost · local logs only")
+                        .font(.system(size: 9)).foregroundColor(.secondary)
+                }
+            }
+
             if showMetrics, !dashboard.metrics.isEmpty {
                 LazyVGrid(
                     columns: [GridItem(.flexible()), GridItem(.flexible())],

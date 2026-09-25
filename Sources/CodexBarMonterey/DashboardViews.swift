@@ -763,10 +763,17 @@ struct ProviderDetailPopoverView: View {
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 16) {
                     statusContent
+                    if dashboard.id == "claude" {
+                        quotaContent
+                        ClaudeQuotaCoverageView(dashboard: dashboard)
+                        ClaudeQuotaHistoryView(dashboard: dashboard)
+                    }
+                    SubscriptionTimingView(dashboard: dashboard)
                     metricsContent
                     DashboardTopModelsView(dashboard: dashboard)
                         .foregroundColor(.secondary)
-                    quotaContent
+                    if dashboard.id != "claude" { quotaContent }
+                    ProviderUsageValueView(dashboard: dashboard)
                     historyContent
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -856,7 +863,7 @@ struct ProviderDetailPopoverView: View {
     @ViewBuilder
     private var metricsContent: some View {
         if !dashboard.metrics.isEmpty {
-            ProviderDetailSectionTitle(title: "Summary", symbol: "rectangle.grid.2x2")
+            ProviderDetailSectionTitle(title: dashboard.summarySectionTitle, symbol: "rectangle.grid.2x2")
             LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
                 ForEach(dashboard.metrics) { metric in
                     ProviderDetailMetricCell(metric: metric)
@@ -868,7 +875,7 @@ struct ProviderDetailPopoverView: View {
     @ViewBuilder
     private var quotaContent: some View {
         if !dashboard.quotas.isEmpty {
-            ProviderDetailSectionTitle(title: "Quotas", symbol: "gauge")
+            ProviderDetailSectionTitle(title: dashboard.quotaSectionTitle, symbol: "gauge")
             VStack(spacing: 10) {
                 ForEach(dashboard.quotas) { lane in
                     ProviderDetailQuotaRow(
@@ -883,7 +890,7 @@ struct ProviderDetailPopoverView: View {
     private var historyContent: some View {
         let series = dashboardHistorySeries(for: dashboard)
         if !series.isEmpty {
-            ProviderDetailSectionTitle(title: "History", symbol: "chart.xyaxis.line")
+            ProviderDetailSectionTitle(title: dashboard.historySectionTitle, symbol: "chart.xyaxis.line")
             Text(dashboard.id == "claude" || dashboard.id == "codex"
                 ? "Local model usage · estimated API cost, not your bill. Partial estimates show known costs; fully unknown costs appear as gaps. Claude excludes other models; logs cannot verify the billing account."
                 : "Each chart is labeled and scaled independently.")
@@ -926,7 +933,7 @@ struct ProviderDetailPopoverView: View {
     }
 }
 
-private struct ProviderDetailSectionTitle: View {
+struct ProviderDetailSectionTitle: View {
     let title: String
     let symbol: String
 
@@ -1339,18 +1346,26 @@ private struct AllProviderCard: View {
             if let error = dashboard.errorMessage {
                 Text(error).font(.system(size: 11)).foregroundColor(.orange)
             }
+            if dashboard.id == "claude" {
+                claudeQuotaContent
+                ProviderDetailSectionTitle(title: dashboard.summarySectionTitle, symbol: "rectangle.grid.2x2")
+            }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 125), alignment: .leading)], alignment: .leading, spacing: 10) {
                 ForEach(dashboard.metrics) { metric in
                     AllProviderMetricView(metric: metric)
                 }
             }
-            ForEach(dashboard.quotas) { lane in
-                ProviderDetailQuotaRow(lane: lane, color: ProviderBrand.color(for: dashboard.id))
+            if dashboard.id != "claude" {
+                ForEach(dashboard.quotas) { lane in
+                    ProviderDetailQuotaRow(lane: lane, color: ProviderBrand.color(for: dashboard.id))
+                }
             }
             DashboardTopModelsView(dashboard: dashboard)
                 .foregroundColor(.secondary)
+            SubscriptionTimingView(dashboard: dashboard)
+            ProviderUsageValueView(dashboard: dashboard)
             if !dashboard.history.isEmpty {
-                DisclosureGroup("History") {
+                DisclosureGroup(dashboard.historySectionTitle) {
                     VStack(spacing: 10) {
                         ForEach(dashboardHistorySeries(for: dashboard)) { item in
                             ProviderHistorySeriesView(series: item)
@@ -1363,6 +1378,17 @@ private struct AllProviderCard: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.07), lineWidth: 1))
     }
+    private var claudeQuotaContent: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ProviderDetailSectionTitle(title: dashboard.quotaSectionTitle, symbol: "gauge")
+            ForEach(dashboard.quotas) { lane in
+                ProviderDetailQuotaRow(lane: lane, color: ProviderBrand.color(for: dashboard.id))
+            }
+            ClaudeQuotaCoverageView(dashboard: dashboard)
+            ClaudeQuotaHistoryView(dashboard: dashboard)
+        }
+    }
+
     private var header: some View {
             HStack(spacing: 10) {
                 Image(systemName: ProviderBrand.symbol(for: dashboard.id))
@@ -1425,12 +1451,7 @@ private func currencyNumber(_ value: Double, code: String?) -> String {
     guard let rawCode = code?.uppercased(), rawCode.count == 3 else {
         return String(format: "%.2f", value)
     }
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .currency
-    formatter.currencyCode = rawCode
-    formatter.maximumFractionDigits = 2
-    return formatter.string(from: NSNumber(value: value))
-        ?? "\(rawCode) \(String(format: "%.2f", value))"
+    return CurrencyDisplay().format(value, source: rawCode)
 }
 
 private func compactNumber(_ value: Double) -> String {

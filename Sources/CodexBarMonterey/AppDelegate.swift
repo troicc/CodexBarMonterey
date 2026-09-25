@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let updater = UpdaterController()
         updaterController = updater
         menuController = MenuController(client: CLIClient(), updater: updater)
+        CurrencySettingsStore.shared.start()
 
         if let outputPath = ProcessInfo.processInfo.environment["CODEXBAR_MONTEREY_UI_SMOKE_OUTPUT"],
            !outputPath.isEmpty

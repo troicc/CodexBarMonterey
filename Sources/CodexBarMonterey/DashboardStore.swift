@@ -23,9 +23,11 @@ final class DashboardStore: ObservableObject {
     private var loadingProviders: [String: Int] = [:]
     private var supplementalJSONBySnapshot: [String: String] = [:]
     private var supplementalJSONByProvider: [String: String] = [:]
+    private var presentationSupplementBySnapshot: [String: String] = [:]
     private var refreshPending = false
     private var snapshotGeneration = 0
     private let quotaTrendStore = LocalQuotaTrendStore()
+    private let claudeQuotaHistoryStore = ClaudeQuotaHistoryStore()
     private let spendHistoryStore = LocalSpendHistoryStore()
     private let tokenHistoryStore: LocalTokenHistoryStore
 
@@ -77,6 +79,7 @@ final class DashboardStore: ObservableObject {
             supplementalJSONBySnapshot = supplementalJSONBySnapshot.filter {
                 currentSnapshotIDs.contains($0.key)
             }
+            presentationSupplementBySnapshot = presentationSupplementBySnapshot.filter { currentSnapshotIDs.contains($0.key) }
             supplementalJSONByProvider = supplementalJSONByProvider.filter {
                 currentProviderIDs.contains($0.key)
             }
@@ -96,9 +99,11 @@ final class DashboardStore: ObservableObject {
                     localQuota,
                     localSpend,
                     localTokens)
-                let dashboard = DashboardParser.dashboard(
+                var dashboard = DashboardParser.dashboard(
                     snapshot: snapshot,
                     supplementalJSON: combinedSupplement)
+                attachClaudeQuotaHistory(to: &dashboard, snapshot: snapshot)
+                presentationSupplementBySnapshot[snapshot.id] = combinedSupplement
                 rebuilt[snapshot.id] = dashboard
             }
             if tokenHistoryStore.revision != tokenRevisionBeforeRefresh {
@@ -200,10 +205,32 @@ final class DashboardStore: ObservableObject {
             localQuota,
             localSpend,
             localTokens)
-        let dashboard = DashboardParser.dashboard(
+        var dashboard = DashboardParser.dashboard(
             snapshot: snapshot,
             supplementalJSON: resolvedSupplement)
+        attachClaudeQuotaHistory(to: &dashboard, snapshot: snapshot)
         dashboards[key] = dashboard
+        presentationSupplementBySnapshot[key] = resolvedSupplement
+    }
+
+    private func attachClaudeQuotaHistory(to dashboard: inout ProviderDashboard, snapshot: ProviderSnapshot) {
+        guard snapshot.provider == "claude" else { return }
+        dashboard.claudeQuotaHistory = claudeQuotaHistoryStore.record(snapshot: snapshot)
+        dashboard.claudeQuotaHistoryNotice = snapshot.claudeQuotaAccountKey == nil
+            ? "Account identity unavailable. History starts after this account can be identified."
+            : claudeQuotaHistoryStore.persistenceError
+    }
+
+    func rebuildCurrencyPresentation() {
+        var rebuilt: [String: ProviderDashboard] = [:]
+        for snapshot in snapshots {
+            rebuilt[snapshot.id] = DashboardParser.dashboard(snapshot: snapshot,
+                supplementalJSON: presentationSupplementBySnapshot[snapshot.id])
+            rebuilt[snapshot.id]?.claudeQuotaHistory = dashboards[snapshot.id]?.claudeQuotaHistory ?? []
+            rebuilt[snapshot.id]?.claudeQuotaHistoryNotice = dashboards[snapshot.id]?.claudeQuotaHistoryNotice
+        }
+        dashboards = rebuilt
+        onRefreshStateChanged?()
     }
     func dashboard(for snapshot: ProviderSnapshot) -> ProviderDashboard {
         dashboards[snapshot.id] ?? DashboardParser.dashboard(snapshot: snapshot)

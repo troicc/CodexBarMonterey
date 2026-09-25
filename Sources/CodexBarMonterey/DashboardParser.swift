@@ -301,7 +301,16 @@ enum DashboardParser {
             statusURL: snapshot.status?.url ?? ProviderCatalog.statusURL(for: snapshot.provider),
             topModel10Days: costPayload != nil ? costPayload?.topModel(dayCount: 10) : localTokenHistory?.topModel10Days,
             topModelToday: costPayload != nil ? costPayload?.topModel(dayCount: 1) : localTokenHistory?.topModelToday,
-            planLabel: snapshot.planDisplayName)
+            planLabel: snapshot.planDisplayName,
+            subscriptionPreferenceKey: costBackedProvider
+                ? "monthlySubscriptionUSD.\(snapshot.provider).\(StableIdentifier.hash(snapshot.id))" : nil,
+            subscriptionDatePreferenceKey: SubscriptionTiming.preferenceKey(for: snapshot),
+            subscriptionExpiresAt: snapshot.usage?.subscriptionExpiresAt,
+            subscriptionRenewsAt: snapshot.usage?.subscriptionRenewsAt,
+            usageCostEstimate: snapshot.provider == "claude" && rawCostPayload?.daily == nil
+                ? nil : costPayload?.last30DaysCostEstimate,
+            modelUsage: costPayload?.modelUsage() ?? [],
+            hasClaudeSharedQuota: !snapshot.claudeSharedQuotaWindows.isEmpty)
     }
 
     private struct DeepSeekPayload {
@@ -1002,12 +1011,7 @@ enum DashboardParser {
         guard let code = ProviderFinanceParsing.normalizedCurrencyCode(code) else {
             return decimal(value)
         }
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = code
-        formatter.maximumFractionDigits = 2
-        return formatter.string(from: NSNumber(value: value))
-            ?? "\(code) \(String(format: "%.2f", value))"
+        return CurrencyDisplay().format(value, source: code)
     }
 
     private static func compact(_ value: Double?) -> String? {

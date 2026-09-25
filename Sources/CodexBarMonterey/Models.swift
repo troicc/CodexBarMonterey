@@ -285,6 +285,43 @@ struct UsageSnapshot: Decodable, Hashable {
     let accountEmail: String?
     let accountOrganization: String?
     let loginMethod: String?
+    var subscriptionExpiresAt: Date? = nil
+    var subscriptionRenewsAt: Date? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case primary, secondary, tertiary, updatedAt, identity, accountEmail, accountOrganization, loginMethod
+        case subscriptionExpiresAt, subscriptionRenewsAt
+    }
+
+    init(primary: RateWindow?, secondary: RateWindow?, tertiary: RateWindow?, updatedAt: Date?,
+         identity: UsageIdentity?, accountEmail: String?, accountOrganization: String?, loginMethod: String?,
+         subscriptionExpiresAt: Date? = nil, subscriptionRenewsAt: Date? = nil) {
+        self.primary = primary
+        self.secondary = secondary
+        self.tertiary = tertiary
+        self.updatedAt = updatedAt
+        self.identity = identity
+        self.accountEmail = accountEmail
+        self.accountOrganization = accountOrganization
+        self.loginMethod = loginMethod
+        self.subscriptionExpiresAt = subscriptionExpiresAt
+        self.subscriptionRenewsAt = subscriptionRenewsAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        primary = try c.decodeIfPresent(RateWindow.self, forKey: .primary)
+        secondary = try c.decodeIfPresent(RateWindow.self, forKey: .secondary)
+        tertiary = try c.decodeIfPresent(RateWindow.self, forKey: .tertiary)
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt)
+        identity = try c.decodeIfPresent(UsageIdentity.self, forKey: .identity)
+        accountEmail = try c.decodeIfPresent(String.self, forKey: .accountEmail)
+        accountOrganization = try c.decodeIfPresent(String.self, forKey: .accountOrganization)
+        loginMethod = try c.decodeIfPresent(String.self, forKey: .loginMethod)
+        // Optional billing metadata must not discard otherwise valid quota data.
+        subscriptionExpiresAt = try? c.decodeIfPresent(Date.self, forKey: .subscriptionExpiresAt)
+        subscriptionRenewsAt = try? c.decodeIfPresent(Date.self, forKey: .subscriptionRenewsAt)
+    }
 }
 
 struct UsageIdentity: Decodable, Hashable {
