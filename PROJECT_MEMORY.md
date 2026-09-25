@@ -6,7 +6,10 @@
 
 - 用户随后明确选择「两者都上传」，授权把旧备份和最新源码/安装包都上传当前 GitHub 仓库。最新源码范围包括已在本机验证并安装的费用/汇率、订阅日期、Claude 全端共享额度和本地趋势，以及对应测试；原备份清理范围仍未确认，不能据此删除。
 - 本轮复核安装包与 `/private/tmp/codexbar-web-quota-build/CodexBar Monterey Local Validation.app` 的主程序、Info.plist 一致，主程序 SHA-256 `52e58bfa6c70e66ff9bc5fc46e70a9352dc18cb9ef81846ec3d9da1856f5b497`。前文的轻量回归、双架构构建、视觉 QA 和真实运行结果仍适用于当前 Swift 源码；源码推送后由 main CI 补跑完整 SwiftPM 和构建检查。
-- 最新安装包将作为与源码提交关联的本地验证版草稿附件上传；不是正式版本发布，不创建 vX.Y.Z tag、不改 ENGINE_VERSION 或 appcast、不替换已有正式 Release。打包只包含应用，凭据、Config/build.env、个人设置、用量账本不上传。后续推送/CI/附件校验结果按实际远端状态核实。
+- 功能源码已提交 `dea5ea505f12cb3550574e0fc6ec95e7cf0d0746` 并正常推送 `origin/main`。GitHub CI https://github.com/troicc/CodexBarMonterey/actions/runs/36122254616 全部成功（12m33s），包括完整 SwiftPM tests、menu preflight、Universal 2 构建、macOS 12 和离线 bundle smoke；这是首次本轮完整 CI 通过证据，不能反向把此前仅本机验证说成当时已通过 CI。
+- 最新本地验证安装包（0.10.0 / 202609251739）已上传草稿 `local-validation-202609251739`：https://github.com/troicc/CodexBarMonterey/releases/tag/untagged-fa7657991c4621be21eb 。附件为约 22 MiB 的 ZIP、BUILD-METADATA.json、SHA256SUMS，共 3 个；远端 state/size/SHA-256 全部与本地一致，压缩包已实际解压并对比完整 bundle 文件哈希、模式、符号链接和签名。元数据的 32 个 Swift source hashes 逐项匹配功能提交 dea5ea5，主程序/helper hash 与来源说明均保存。
+- 本次是源码上传与本地安装包归档，不是正式版本发布：不创建 vX.Y.Z tag、不改 ENGINE_VERSION/appcast、不替换已有正式 Release。草稿安装包仍为此前本机 ad-hoc 包、复用 helper/Sparkle；CI 本次另行完整构建的 artifact 不能与它混为同一字节产物。凭据、Config/build.env、个人设置、用量账本未上传。
+- 远端校验后已删除本轮生成的约 22 MiB 临时 ZIP，保留 `/private/tmp/codexbar-current-upload-20260925/{BUILD-METADATA.json,SHA256SUMS,verification.json}` 作为核验记录。8 个原始旧备份及当前安装应用均未删除；用户的「两者都上传」明确回答上传范围，不是对本地 7 份旧备份清理提议的确认。
 
 ## 2026-09-25 旧应用备份归档到 GitHub
 
